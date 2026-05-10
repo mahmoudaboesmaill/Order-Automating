@@ -127,7 +127,12 @@ fun ReviewScreen(
                     status = "جاري الإرسال..."
                     scope.launch(Dispatchers.IO) {
                         val invoiceItems = readyItems.map {
-                            Item(it.itmCode, it.quantity.toInt(), it.price)
+                            Item(
+                                itmCode = it.itmCode,
+                                quantity = it.quantity.toInt(),
+                                price = it.price,
+                                discount = it.discount  // ← أضف ده
+                            )
                         }
                         val result = sendInvoice(supplierCode, invoiceNumber, invoiceItems)
                         withContext(Dispatchers.Main) {

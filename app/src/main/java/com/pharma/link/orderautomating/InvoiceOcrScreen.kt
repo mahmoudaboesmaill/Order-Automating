@@ -34,7 +34,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 
-const val GEMINI_API_KEY = "REMOVED_GOOGLE_API_KEY"
+
+const val GEMINI_API_KEY = BuildConfig.GEMINI_API_KEY
 
 data class OcrItem(
     val invoiceName: String,
