@@ -19,6 +19,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        val localProps = com.android.build.gradle.internal.cxx.configure.gradleLocalProperties(rootDir, providers)
+        buildConfigField("String", "GEMINI_API_KEY", "\"${localProps["gemini_api_key"]}\"")
     }
 
     buildTypes {
@@ -36,6 +39,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

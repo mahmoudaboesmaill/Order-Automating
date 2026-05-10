@@ -18,6 +18,7 @@ fun sendInvoice(
                 put("itm_code", item.itmCode)
                 put("quantity", item.quantity)
                 put("price", item.price)
+                put("discount", item.discount)  // ← أضف ده
             })
         }
 
