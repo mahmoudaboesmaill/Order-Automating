@@ -34,7 +34,6 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 
-
 const val GEMINI_API_KEY = BuildConfig.GEMINI_API_KEY
 
 data class OcrItem(
@@ -62,13 +61,12 @@ fun InvoiceOcrScreen(
                     == PackageManager.PERMISSION_GRANTED
         )
     }
-    var status by remember { mutableStateOf("اختر طريقة إدخال الفاتورة") }
+    var status by remember { mutableStateOf("") }
     var processing by remember { mutableStateOf(false) }
     var showCamera by remember { mutableStateOf(false) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     val scope = rememberCoroutineScope()
 
-    // Camera permission
     val cameraPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -77,7 +75,6 @@ fun InvoiceOcrScreen(
         else status = "⚠️ محتاج صلاحية الكاميرا"
     }
 
-    // Gallery picker
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -85,12 +82,26 @@ fun InvoiceOcrScreen(
             processing = true
             status = "جاري المعالجة..."
             scope.launch(Dispatchers.IO) {
-                val bitmap = uriToBitmap(context, it)
-                val items = bitmap?.let { bmp -> sendToGemini(bmp) }
-                withContext(Dispatchers.Main) {
-                    processing = false
-                    if (items != null) onItemsReady(items)
-                    else status = "❌ فشل في القراءة — حاول تاني"
+                try {
+                    val bitmap = uriToBitmap(context, it)
+                    if (bitmap == null) {
+                        withContext(Dispatchers.Main) {
+                            processing = false
+                            status = "❌ فشل في تحميل الصورة"
+                        }
+                        return@launch
+                    }
+                    val items = sendToGemini(bitmap)
+                    withContext(Dispatchers.Main) {
+                        processing = false
+                        if (items != null) onItemsReady(items)
+                        else status = "❌ فشل في القراءة — حاول تاني"
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        processing = false
+                        status = "❌ خطأ: ${e.message}"
+                    }
                 }
             }
         }
@@ -99,7 +110,6 @@ fun InvoiceOcrScreen(
     Box(modifier = Modifier.fillMaxSize()) {
 
         if (showCamera && hasPermission) {
-            // Camera Preview
             AndroidView(
                 factory = { ctx ->
                     val previewView = PreviewView(ctx)
@@ -182,7 +192,6 @@ fun InvoiceOcrScreen(
             }
 
         } else {
-            // اختيار الطريقة
             Column(
                 modifier = Modifier.fillMaxSize().padding(24.dp),
                 verticalArrangement = Arrangement.Center,
@@ -191,32 +200,41 @@ fun InvoiceOcrScreen(
                 Text("إدخال الفاتورة", fontSize = 22.sp)
                 Spacer(Modifier.height(32.dp))
 
-                // زر الكاميرا
                 Button(
                     onClick = {
                         if (hasPermission) showCamera = true
                         else cameraPermLauncher.launch(Manifest.permission.CAMERA)
                     },
+                    enabled = !processing,
                     modifier = Modifier.fillMaxWidth().height(60.dp)
                 ) { Text("📸 تصوير الفاتورة", fontSize = 18.sp) }
 
                 Spacer(Modifier.height(16.dp))
 
-                // زر اختيار من المعرض
                 Button(
                     onClick = { galleryLauncher.launch("image/*") },
+                    enabled = !processing,
                     modifier = Modifier.fillMaxWidth().height(60.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.secondary
                     )
                 ) { Text("🖼️ اختيار من الجهاز", fontSize = 18.sp) }
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(24.dp))
 
+                // ← التعديل: status يظهر دايماً
                 if (processing) {
                     CircularProgressIndicator()
                     Spacer(Modifier.height(8.dp))
-                    Text(status)
+                    Text(status, fontSize = 14.sp)
+                } else if (status.isNotEmpty()) {
+                    Text(
+                        text = status,
+                        fontSize = 14.sp,
+                        color = if (status.startsWith("❌") || status.startsWith("⚠️"))
+                            MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurface
+                    )
                 }
 
                 Spacer(Modifier.height(16.dp))
@@ -229,8 +247,6 @@ fun InvoiceOcrScreen(
     }
 }
 
-// ── Helper functions ──────────────────────────────────────
-
 @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
 private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
     val buffer = image.planes[0].buffer
@@ -241,10 +257,15 @@ private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
     return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
 }
 
+// ← التعديل: ALLOCATOR_SOFTWARE عشان يحل مشكلة hardware bitmap
 private fun uriToBitmap(context: android.content.Context, uri: Uri): Bitmap? {
     return try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri))
+            ImageDecoder.decodeBitmap(
+                ImageDecoder.createSource(context.contentResolver, uri)
+            ) { decoder, _, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
         } else {
             @Suppress("DEPRECATION")
             MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
@@ -259,9 +280,11 @@ private fun bitmapToBase64(bitmap: Bitmap): String {
     val maxW = 1600; val maxH = 2400
     val scale = minOf(maxW.toFloat() / bitmap.width, maxH.toFloat() / bitmap.height, 1f)
     val scaled = if (scale < 1f)
-        Bitmap.createScaledBitmap(bitmap,
+        Bitmap.createScaledBitmap(
+            bitmap,
             (bitmap.width * scale).toInt(),
-            (bitmap.height * scale).toInt(), true)
+            (bitmap.height * scale).toInt(), true
+        )
     else bitmap
     val stream = ByteArrayOutputStream()
     scaled.compress(Bitmap.CompressFormat.JPEG, 85, stream)
@@ -269,73 +292,75 @@ private fun bitmapToBase64(bitmap: Bitmap): String {
 }
 
 fun sendToGemini(bitmap: Bitmap): List<OcrItem>? {
-    return try {
-        val base64Image = bitmapToBase64(bitmap)
-        val prompt = """
-            هذه صورة فاتورة شراء صيدلية.
-            استخرج كل الأصناف من الجدول وأرجع JSON فقط بالشكل التالي بدون أي نص إضافي:
-            {"items": [{"name": "اسم الصنف", "quantity": 0, "discount": 0, "price": 0}]}
-            - name: اسم الصنف كما هو مكتوب في الفاتورة
-            - quantity: الكمية (رقم)
-            - discount: نسبة الخصم (رقم بدون %)
-            - price: سعر الشراء للوحدة (رقم)
-        """.trimIndent()
+    // امسح الـ try-catch الخارجي — خلّيها تـ throw
+    val base64Image = bitmapToBase64(bitmap)
+    val prompt = """
+        هذه صورة فاتورة شراء صيدلية.
+        استخرج كل الأصناف من الجدول وأرجع JSON فقط بالشكل التالي بدون أي نص إضافي:
+        {"items": [{"name": "اسم الصنف", "quantity": 0, "discount": 0, "price": 0}]}
+        - name: اسم الصنف كما هو مكتوب في الفاتورة
+        - quantity: الكمية (رقم)
+        - discount: نسبة الخصم (رقم بدون %)
+        - price: سعر الشراء للوحدة (رقم)
+    """.trimIndent()
 
-        val requestBody = JSONObject().apply {
-            put("contents", JSONArray().put(JSONObject().apply {
-                put("parts", JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("inline_data", JSONObject().apply {
-                            put("mime_type", "image/jpeg")
-                            put("data", base64Image)
-                        })
+    val requestBody = JSONObject().apply {
+        put("contents", JSONArray().put(JSONObject().apply {
+            put("parts", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("inline_data", JSONObject().apply {
+                        put("mime_type", "image/jpeg")
+                        put("data", base64Image)
                     })
-                    put(JSONObject().apply { put("text", prompt) })
                 })
-            }))
-            put("generationConfig", JSONObject().apply {
-                put("temperature", 0)
-                put("maxOutputTokens", 2000)
+                put(JSONObject().apply { put("text", prompt) })
             })
+        }))
+        put("generationConfig", JSONObject().apply {
+            put("temperature", 0)
+            put("maxOutputTokens", 8192)  // ← كان 2000 خليه 8192
+        })
+    }
+
+    val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY"
+    val conn = URL(url).openConnection() as HttpURLConnection
+    conn.apply {
+        requestMethod = "POST"
+        setRequestProperty("Content-Type", "application/json")
+        doOutput = true
+        connectTimeout = 30000
+        readTimeout = 30000
+        outputStream.write(requestBody.toString().toByteArray())
+    }
+
+    val responseCode = conn.responseCode
+    val response = if (responseCode == 200)
+        conn.inputStream.bufferedReader().readText()
+    else {
+        val errBody = conn.errorStream?.bufferedReader()?.readText() ?: "no error body"
+        throw Exception("HTTP $responseCode: $errBody")
+    }
+
+    var text = JSONObject(response)
+        .getJSONArray("candidates")
+        .getJSONObject(0)
+        .getJSONObject("content")
+        .getJSONArray("parts")
+        .getJSONObject(0)
+        .getString("text")
+        .trim()
+
+    text = text.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+
+    val itemsArray = JSONObject(text).getJSONArray("items")
+    return (0 until itemsArray.length()).map { i ->
+        itemsArray.getJSONObject(i).let { obj ->
+            OcrItem(
+                invoiceName = obj.getString("name"),
+                quantity    = obj.optDouble("quantity", 0.0),
+                discount    = obj.optDouble("discount", 0.0),
+                price       = obj.optDouble("price", 0.0)
+            )
         }
-
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$GEMINI_API_KEY"
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.apply {
-            requestMethod = "POST"
-            setRequestProperty("Content-Type", "application/json")
-            doOutput = true
-            connectTimeout = 30000
-            readTimeout = 30000
-            outputStream.write(requestBody.toString().toByteArray())
-        }
-
-        val response = conn.inputStream.bufferedReader().readText()
-        var text = JSONObject(response)
-            .getJSONArray("candidates")
-            .getJSONObject(0)
-            .getJSONObject("content")
-            .getJSONArray("parts")
-            .getJSONObject(0)
-            .getString("text")
-            .trim()
-
-        // شيل الـ markdown لو موجود
-        text = text.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-
-        val itemsArray = JSONObject(text).getJSONArray("items")
-        (0 until itemsArray.length()).map { i ->
-            itemsArray.getJSONObject(i).let { obj ->
-                OcrItem(
-                    invoiceName = obj.getString("name"),
-                    quantity    = obj.optDouble("quantity", 0.0),
-                    discount    = obj.optDouble("discount", 0.0),
-                    price       = obj.optDouble("price", 0.0)
-                )
-            }
-        }
-    } catch (e: Exception) {
-        e.printStackTrace()
-        null
     }
 }

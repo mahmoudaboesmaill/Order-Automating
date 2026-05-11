@@ -33,11 +33,11 @@ fun MappingScreen(
             }
         }
         val firstUnmapped = mappedItems.indexOfFirst { !it.matched }
-        currentIndex = if (firstUnmapped != -1) firstUnmapped else -1
-        if (currentIndex == -1) onDone(mappedItems)
+        currentIndex = if (firstUnmapped != -1) firstUnmapped else mappedItems.size
+
     }
 
-    if (currentIndex == -1 || currentIndex >= mappedItems.size) {
+    if (currentIndex >= mappedItems.size) {
         onDone(mappedItems)
         return
     }
