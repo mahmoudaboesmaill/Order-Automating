@@ -7,6 +7,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 fun sendInvoice(
+    context: android.content.Context,
     supplierCode: String,
     invoiceNumber: String,
     items: List<Item>
@@ -18,7 +19,10 @@ fun sendInvoice(
                 put("itm_code", item.itmCode)
                 put("quantity", item.quantity)
                 put("price", item.price)
-                put("discount", item.discount)  // ← أضف ده
+                put("sale_price", item.salePrice)
+                put("taxes", item.taxes) // إرسال الضريبة
+                put("discount", item.discount)
+                put("bonus", item.bonus)
             })
         }
 
@@ -28,7 +32,8 @@ fun sendInvoice(
             put("items", itemsArray)
         }.toString()
 
-        val conn = URL("http://192.168.1.184:8080/invoice")
+        val baseUrl = ServerManager.getSelectedUrl(context)
+        val conn = URL("$baseUrl/invoice")
             .openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.setRequestProperty("Content-Type", "application/json")

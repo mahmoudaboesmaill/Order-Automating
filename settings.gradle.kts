@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Order Automating"
+rootProject.name = "OrderAutomating_V2"
 include(":app")
  
