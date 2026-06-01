@@ -29,9 +29,13 @@ object ItemsDatabase {
     val importProgress: StateFlow<Float> = _importProgress
 
     suspend fun load(context: Context): Int = withContext(Dispatchers.IO) {
-        val dao = AppDatabase.getDatabase(context).pharmacyItemDao()
+        val db = AppDatabase.getDatabase(context)
+        val dao = db.pharmacyItemDao()
         val currentCount = dao.getCount()
         
+        // تحميل الموردين الافتراضيين
+        seedDefaultSuppliers(context)
+
         // إذا كانت فارغة، حمل البيانات
         if (currentCount < 1000) { 
             _importProgress.value = 0f
@@ -39,6 +43,24 @@ object ItemsDatabase {
             _importProgress.value = 1f
         }
         dao.getCount()
+    }
+
+    private suspend fun seedDefaultSuppliers(context: Context) {
+        val dao = AppDatabase.getDatabase(context).supplierDictionaryDao()
+        if (dao.getAll().isEmpty()) {
+            val defaults = listOf(
+                SupplierDictionary(arabicName = "ابن سينا", englishName = "ibnsinapharma", supplierCode = "29"),
+                SupplierDictionary(arabicName = "ibn sina", englishName = "ibnsina", supplierCode = "29"),
+                SupplierDictionary(arabicName = "فارما أوفر سيز", englishName = "pharmaoverseas", supplierCode = "38"),
+                SupplierDictionary(arabicName = "pharma overseas", englishName = "pharmaoverseas", supplierCode = "38"),
+                SupplierDictionary(arabicName = "تبارك", englishName = "tabarak", supplierCode = "218"),
+                SupplierDictionary(arabicName = "مالتي ستورز", englishName = "multi stores", supplierCode = "218"),
+                SupplierDictionary(arabicName = "يونايتد جروب", englishName = "united group", supplierCode = "198"),
+                SupplierDictionary(arabicName = "دريم", englishName = "dream", supplierCode = "175"),
+                SupplierDictionary(arabicName = "دريم لمستحضرات التجميل", englishName = "dream cosmetics", supplierCode = "175")
+            )
+            defaults.forEach { dao.insert(it) }
+        }
     }
 
     private suspend fun importFromAssets(context: Context) {

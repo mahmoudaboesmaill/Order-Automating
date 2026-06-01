@@ -20,6 +20,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.*
 
 @Composable
@@ -29,33 +30,29 @@ fun ReviewScreen(
     items: List<OcrItem>,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
-    onUpdateHeader: (String, String) -> Unit = { _, _ -> }
+    onUpdateHeader: (String, String) -> Unit = { _, _ -> },
+    viewModel: ReviewViewModel = viewModel()
 ) {
     val context = LocalContext.current
-    var supplierCode by remember { mutableStateOf(initialSupplierCode) }
-    var invoiceNumber by remember { mutableStateOf(initialInvoiceNumber) }
-    val editableItems = remember { items.toMutableStateList() }
-    var status by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
     
-    var itemToRemapIndex by remember { mutableStateOf(-1) }
+    val supplierCode by viewModel.supplierCode.collectAsState()
+    val invoiceNumber by viewModel.invoiceNumber.collectAsState()
+    val editableItems by viewModel.editableItems.collectAsState()
+    val status by viewModel.status.collectAsState()
+    val loading by viewModel.loading.collectAsState()
+    val itemToRemapIndex by viewModel.itemToRemapIndex.collectAsState()
+
+    LaunchedEffect(Unit) {
+        viewModel.init(initialSupplierCode, initialInvoiceNumber, items)
+    }
 
     if (itemToRemapIndex != -1) {
         val currentItem = editableItems[itemToRemapIndex]
         MappingDialog(
             invoiceName = currentItem.invoiceName,
-            onDismiss = { itemToRemapIndex = -1 },
+            onDismiss = { viewModel.setItemToRemap(-1) },
             onSelect = { newItem ->
-                scope.launch {
-                    val mappingKey = currentItem.invoiceName.trim().lowercase()
-                    val sCode = supplierCode.trim().lowercase()
-                    AppDatabase.getDatabase(context).smartMappingDao().insertMapping(
-                        SmartMapping(sCode, mappingKey, newItem.itmCode)
-                    )
-                    editableItems[itemToRemapIndex] = currentItem.copy(itmCode = newItem.itmCode)
-                    itemToRemapIndex = -1
-                }
+                viewModel.remapItem(context, itemToRemapIndex, newItem)
             }
         )
     }
@@ -72,11 +69,11 @@ fun ReviewScreen(
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         SmallHeaderField(value = supplierCode, label = "مورد", modifier = Modifier.weight(1f)) { 
-                            supplierCode = it 
+                            viewModel.updateSupplierCode(it)
                             onUpdateHeader(it, invoiceNumber)
                         }
                         SmallHeaderField(value = invoiceNumber, label = "فاتورة", modifier = Modifier.weight(1f)) { 
-                            invoiceNumber = it 
+                            viewModel.updateInvoiceNumber(it)
                             onUpdateHeader(supplierCode, it)
                         }
                     }
@@ -101,36 +98,7 @@ fun ReviewScreen(
                     }
 
                     Button(
-                        onClick = {
-                            val readyItems = editableItems.filter { it.itmCode.isNotEmpty() }
-                             if (readyItems.isEmpty()) {
-                                status = "⚠️ مفيش أصناف مطابقة"; return@Button
-                            }
-                            if (supplierCode.isBlank() || invoiceNumber.isBlank()) {
-                                status = "⚠️ البيانات الأساسية ناقصة"; return@Button
-                            }
-                            loading = true
-                            status = "جاري الإرسال..."
-                            scope.launch(Dispatchers.IO) {
-                                try {
-                                    val invoiceItems = readyItems.map {
-                                        Item(
-                                            itmCode = it.itmCode,
-                                            quantity = it.quantity.toInt(),
-                                            price = it.price,
-                                            salePrice = it.salePrice,
-                                            taxes = it.taxes,
-                                            discount = 0.0,
-                                            bonus = it.bonus.toInt()
-                                        )
-                                    }
-                                    val result = sendInvoice(context, supplierCode, invoiceNumber, invoiceItems)
-                                    withContext(Dispatchers.Main) { loading = false; status = result }
-                                } catch (e: Exception) {
-                                    withContext(Dispatchers.Main) { loading = false; status = "❌ خطأ: ${e.message}" }
-                                }
-                            }
-                        },
+                        onClick = { viewModel.sendInvoice(context) },
                         enabled = !loading,
                         modifier = Modifier.weight(1f).height(56.dp),
                         shape = MaterialTheme.shapes.medium
@@ -162,9 +130,9 @@ fun ReviewScreen(
                 itemsIndexed(editableItems) { index, item ->
                     ReviewItemCard(
                         item = item,
-                        onDelete = { editableItems.removeAt(index) },
-                        onRemap = { itemToRemapIndex = index },
-                        onUpdate = { updated -> editableItems[index] = updated }
+                        onDelete = { viewModel.deleteItem(index) },
+                        onRemap = { viewModel.setItemToRemap(index) },
+                        onUpdate = { updated -> viewModel.updateItem(index, updated) }
                     )
                 }
             }

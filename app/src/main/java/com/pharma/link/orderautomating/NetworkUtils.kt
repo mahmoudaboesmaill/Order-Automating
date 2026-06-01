@@ -6,12 +6,18 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 
+/**
+ * @deprecated استخدم [InvoiceRepository.sendInvoice] بدلاً من هذا الملف.
+ * تم نقل المنطق البرمجي للمستودع لاتباع مبادئ Clean Architecture.
+ */
+@Deprecated("استخدم InvoiceRepository.sendInvoice", ReplaceWith("InvoiceRepository(context).sendInvoice(supplierCode, invoiceNumber, items)"))
 fun sendInvoice(
     context: android.content.Context,
     supplierCode: String,
     invoiceNumber: String,
     items: List<Item>
 ): String {
+    // تم الاحتفاظ بالكود هنا مؤقتاً للتوافق مع الأجزاء القديمة إن وجدت
     return try {
         val itemsArray = JSONArray()
         items.forEach { item ->
@@ -20,7 +26,7 @@ fun sendInvoice(
                 put("quantity", item.quantity)
                 put("price", item.price)
                 put("sale_price", item.salePrice)
-                put("taxes", item.taxes) // إرسال الضريبة
+                put("taxes", item.taxes)
                 put("discount", item.discount)
                 put("bonus", item.bonus)
             })

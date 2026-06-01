@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 
 @Composable
@@ -27,36 +28,21 @@ fun MappingScreen(
     supplierCode: String,
     ocrItems: List<OcrItem>,
     onDone: (List<OcrItem>) -> Unit,
-    onBack: () -> Unit // أضفنا هذا البارامتر
+    onBack: () -> Unit,
+    viewModel: MappingViewModel = viewModel()
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val mappedItems = remember { ocrItems.toMutableList() }
-    var currentIndex by remember { mutableStateOf(-1) }
-    var searchQuery by remember { mutableStateOf("") }
-    var searchResults by remember { mutableStateOf<List<PharmacyItem>>(emptyList()) }
+    
+    val currentIndex by viewModel.currentIndex.collectAsState()
+    val mappedItems by viewModel.mappedItems.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    val searchResults by viewModel.searchResults.collectAsState()
+    
     var showScanner by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        val db = AppDatabase.getDatabase(context)
-        val mappingDao = db.smartMappingDao()
-        val pharmacyDao = db.pharmacyItemDao()
-        val sCode = supplierCode.trim().lowercase()
-
-        mappedItems.forEachIndexed { i, item ->
-            val mappingKey = item.invoiceName.trim().lowercase()
-            val learnedCode = mappingDao.getMappedCode(sCode, mappingKey)
-            if (learnedCode != null) {
-                mappedItems[i] = item.copy(itmCode = learnedCode, matched = true)
-            } else {
-                val exactMatch = pharmacyDao.getByName(item.invoiceName.trim())
-                if (exactMatch != null) {
-                    mappedItems[i] = item.copy(itmCode = exactMatch.itmCode, matched = true)
-                }
-            }
-        }
-        val firstUnmapped = mappedItems.indexOfFirst { !it.matched }
-        currentIndex = if (firstUnmapped != -1) firstUnmapped else mappedItems.size
+        viewModel.loadMappings(context, supplierCode, ocrItems)
     }
 
     if (currentIndex == -1) {
@@ -92,10 +78,7 @@ fun MappingScreen(
             Surface(tonalElevation = 12.dp, shadowElevation = 12.dp) {
                 Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(
-                        onClick = { 
-                            if (currentIndex > 0) currentIndex-- 
-                            else onBack() // لو في أول صنف يرجع لشاشة الكاميرا
-                        },
+                        onClick = { viewModel.goBack(onBack) },
                         modifier = Modifier.weight(1f).height(56.dp),
                         shape = MaterialTheme.shapes.large
                     ) { 
@@ -105,10 +88,7 @@ fun MappingScreen(
                     }
 
                     Button(
-                        onClick = {
-                            val next = mappedItems.indexOfFirst { !it.matched && mappedItems.indexOf(it) > currentIndex }
-                            currentIndex = if (next != -1) next else mappedItems.size
-                        },
+                        onClick = { viewModel.skipCurrent() },
                         modifier = Modifier.weight(1f).height(56.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
                         shape = MaterialTheme.shapes.large
@@ -150,10 +130,7 @@ fun MappingScreen(
             // شريط البحث "العائم"
             OutlinedTextField(
                 value = searchQuery,
-                onValueChange = {
-                    searchQuery = it
-                    scope.launch { searchResults = ItemsDatabase.search(context, it) }
-                },
+                onValueChange = { viewModel.search(context, it) },
                 placeholder = { Text("ابحث باسم الدواء أو الكود...") },
                 modifier = Modifier.fillMaxWidth(),
                 leadingIcon = { Icon(Icons.Default.Search, null, tint = MaterialTheme.colorScheme.primary) },
@@ -179,19 +156,7 @@ fun MappingScreen(
                 LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(searchResults) { item ->
                         SearchResultItem(item = item) {
-                            scope.launch {
-                                val mappingKey = currentItem.invoiceName.trim().lowercase()
-                                val sCode = supplierCode.trim().lowercase()
-                                // حفظ باسم نظيف تماماً بدون مسافات زائدة
-                                AppDatabase.getDatabase(context).smartMappingDao().insertMapping(
-                                    SmartMapping(sCode, mappingKey, item.itmCode)
-                                )
-                                mappedItems[currentIndex] = currentItem.copy(itmCode = item.itmCode, matched = true)
-                                searchQuery = ""
-                                searchResults = emptyList()
-                                val next = mappedItems.indexOfFirst { !it.matched }
-                                currentIndex = if (next != -1) next else mappedItems.size
-                            }
+                            viewModel.selectItem(context, supplierCode, item)
                         }
                     }
                 }
@@ -204,25 +169,7 @@ fun MappingScreen(
             BarcodeScannerScreen(
                 onBarcodeDetected = { barcode ->
                     showScanner = false
-                    searchQuery = barcode
-                    // تفعيل البحث فوراً بمجرد استلام الباركود
-                    scope.launch {
-                        searchResults = ItemsDatabase.search(context, barcode)
-                        // لو لقى نتيجة واحدة بس، يقدر يطابقها فوراً (اختياري)
-                        if (searchResults.size == 1) {
-                            val item = searchResults[0]
-                            val mappingKey = currentItem.invoiceName.trim().lowercase()
-                            val sCode = supplierCode.trim().lowercase()
-                            AppDatabase.getDatabase(context).smartMappingDao().insertMapping(
-                                SmartMapping(sCode, mappingKey, item.itmCode)
-                            )
-                            mappedItems[currentIndex] = currentItem.copy(itmCode = item.itmCode, matched = true)
-                            searchQuery = ""
-                            searchResults = emptyList()
-                            val next = mappedItems.indexOfFirst { !it.matched }
-                            currentIndex = if (next != -1) next else mappedItems.size
-                        }
-                    }
+                    viewModel.search(context, barcode)
                 },
                 onDismiss = { showScanner = false }
             )

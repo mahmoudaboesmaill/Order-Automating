@@ -10,7 +10,6 @@ import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Base64
-import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
@@ -37,6 +36,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.text.font.FontWeight
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,30 +45,15 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 
+@Deprecated("تم نقل المفتاح للسيرفر لزيادة الأمان", level = DeprecationLevel.WARNING)
 const val GEMINI_API_KEY = BuildConfig.GEMINI_API_KEY
 
-data class OcrItem(
-    val invoiceName: String,
-    var quantity: Double,
-    var bonus: Double = 0.0,
-    var taxes: Double=0.0,
-    var price: Double,       // هذا هو سعر الشراء (الصافي)
-    var salePrice: Double = 0.0, // سعر البيع (الجمهور)
-    var discount: Double = 0.0,
-    var itmCode: String = "",
-    var matched: Boolean = false
-)
-
-data class OcrResponse(
-    val supplierName: String,
-    val invoiceNumber: String,
-    val items: List<OcrItem>
-)
 
 @Composable
 fun InvoiceOcrScreen(
     onResultReady: (OcrResponse) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    viewModel: InvoiceOcrViewModel = viewModel()
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -76,55 +61,36 @@ fun InvoiceOcrScreen(
     // مراقبة تقدم تحميل قاعدة البيانات
     val dbProgress by ItemsDatabase.importProgress.collectAsState()
 
+    val processing by viewModel.processing.collectAsState()
+    val status by viewModel.status.collectAsState()
+    val showCamera by viewModel.showCamera.collectAsState()
+    val capturedBitmap by viewModel.capturedBitmap.collectAsState()
+
     var hasPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
                     == PackageManager.PERMISSION_GRANTED
         )
     }
-    var status by remember { mutableStateOf("") }
-    var processing by remember { mutableStateOf(false) }
-    var showCamera by remember { mutableStateOf(false) }
+    
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
-    var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) } // ← جديد لحفظ اللقطة
     val scope = rememberCoroutineScope()
 
     val cameraPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasPermission = granted
-        if (granted) showCamera = true
-        else status = "⚠️ محتاج صلاحية الكاميرا"
+        if (granted) viewModel.setShowCamera(true)
+        else viewModel.reset() // Or some error state
     }
 
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            processing = true
-            status = "جاري المعالجة..."
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val bitmap = uriToBitmap(context, it)
-                    if (bitmap == null) {
-                        withContext(Dispatchers.Main) {
-                            processing = false
-                            status = "❌ فشل في تحميل الصورة"
-                        }
-                        return@launch
-                    }
-                    val result = sendToGemini(bitmap)
-                    withContext(Dispatchers.Main) {
-                        processing = false
-                        if (result != null) onResultReady(result)
-                        else status = "❌ فشل في القراءة — حاول تاني"
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        processing = false
-                        status = "❌ خطأ: ${e.message}"
-                    }
-                }
+            val bitmap = uriToBitmap(context, it)
+            if (bitmap != null) {
+                viewModel.onGalleryImageSelected(context, bitmap, onResultReady)
             }
         }
     }
@@ -133,23 +99,10 @@ fun InvoiceOcrScreen(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            processing = true
-            status = "جاري قراءة ملف PDF..."
             scope.launch(Dispatchers.IO) {
-                try {
-                    val bytes = context.contentResolver.openInputStream(it)?.readBytes()
-                    if (bytes == null) {
-                        withContext(Dispatchers.Main) { processing = false; status = "❌ فشل قراءة الملف" }
-                        return@launch
-                    }
-                    val result = sendToGemini(null, bytes, "application/pdf")
-                    withContext(Dispatchers.Main) {
-                        processing = false
-                        if (result != null) onResultReady(result)
-                        else status = "❌ فشل تحليل الـ PDF"
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) { processing = false; status = "❌ خطأ: ${e.message}" }
+                val bytes = context.contentResolver.openInputStream(it)?.readBytes()
+                if (bytes != null) {
+                    viewModel.onPdfSelected(context, bytes, onResultReady)
                 }
             }
         }
@@ -222,42 +175,16 @@ fun InvoiceOcrScreen(
                     Button(
                         onClick = {
                             val capture = imageCapture ?: return@Button
-                            processing = true
-                            status = "جاري التقاط الصورة..."
                             capture.takePicture(
                                 ContextCompat.getMainExecutor(context),
                                 object : ImageCapture.OnImageCapturedCallback() {
                                     override fun onCaptureSuccess(image: ImageProxy) {
                                         val bitmap = imageProxyToBitmap(image)
                                         image.close()
-                                        
-                                        // تجميد الشاشة بالصورة الملتقطة
-                                        capturedBitmap = bitmap
-                                        status = "جاري تحليل البيانات بـ AI..."
-
-                                        scope.launch(Dispatchers.IO) {
-                                            try {
-                                                val result = sendToGemini(bitmap)
-                                                withContext(Dispatchers.Main) {
-                                                    processing = false
-                                                    if (result != null) onResultReady(result)
-                                                    else {
-                                                        status = "❌ فشل في القراءة — حاول تاني"
-                                                        capturedBitmap = null // إعادة فتح الكاميرا
-                                                    }
-                                                }
-                                            } catch (e: Exception) {
-                                                withContext(Dispatchers.Main) {
-                                                    processing = false
-                                                    status = "❌ خطأ: ${e.message}"
-                                                    capturedBitmap = null
-                                                }
-                                            }
-                                        }
+                                        viewModel.onCameraCapture(context, bitmap, onResultReady)
                                     }
                                     override fun onError(e: ImageCaptureException) {
-                                        processing = false
-                                        status = "❌ خطأ في الكاميرا"
+                                        // Handle error via viewModel if needed
                                     }
                                 }
                             )
@@ -277,8 +204,8 @@ fun InvoiceOcrScreen(
                 OutlinedButton(
                     onClick = { 
                         if (processing) return@OutlinedButton
-                        if (capturedBitmap != null) capturedBitmap = null
-                        else showCamera = false 
+                        if (capturedBitmap != null) viewModel.setCapturedBitmap(null)
+                        else viewModel.setShowCamera(false)
                     },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
@@ -334,7 +261,7 @@ fun InvoiceOcrScreen(
                     icon = Icons.Default.PhotoCamera,
                     color = MaterialTheme.colorScheme.primary
                 ) {
-                    if (hasPermission) showCamera = true
+                    if (hasPermission) viewModel.setShowCamera(true)
                     else cameraPermLauncher.launch(Manifest.permission.CAMERA)
                 }
 
@@ -453,160 +380,4 @@ private fun bitmapToBase64(bitmap: Bitmap): String {
     return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
 }
 
-fun sendToGemini(bitmap: Bitmap?, pdfBytes: ByteArray? = null, mimeType: String = "image/jpeg"): OcrResponse? {
-    val base64Data = if (pdfBytes != null) {
-        Base64.encodeToString(pdfBytes, Base64.NO_WRAP)
-    } else if (bitmap != null) {
-        bitmapToBase64(bitmap)
-    } else return null
 
-    val prompt = """
-        أنت خبير فواتير أدوية محترف. استخرج البيانات وحولها لـ JSON بهذا الشكل:
-        {
-          "supplier_name": "اسم المورد",
-          "invoice_number": "رقم الفاتورة",
-          "items": [{"name": "اسم الصنف","tax":0, "qty": 0, "bns": 0, "unit_p": 0, "extra": 0, "line_total": 0, "sale_p": 0}]
-        }
-
-        دليل استخراج البيانات حسب المورد:
-        1. يونايتد جروب فارما كود المورد 198  / مالتي ستورز فارما (تبارك) كود المورد 218:
-           - line_total: استخرجه من عمود "إجمالي التكلفة" أو "الإجمالي ".
-           - qty: من عمود "العدد" أو "الكمية".
-           - sale_p: من عمود "سعر الجمهور"أو"السعر" أو "المستهلك".
-
-        2. ابن سينا (Ibnsina):
-           - qty: هو الرقم "العلوي" في خانة الكمية البونص.
-           - bns (البونص): هو الرقم "السفلي" في خانة الكمية البونص.
-           - unit_p: من عمود "سعر الصيدلي".
-           - tax:من عامود "ضريبة ق.م" 
-           - extra: من عمود "هامش صيدلي موزع الرقم العلوي".
-           - sale_p: من عمود "سعر الجمهور" أو "P.P".
-
-        3. فارما أوفر سيز (PharmaOverseas):
-           - qty: الرقم قبل علامة + (مثلاً 10 من 10+1).
-           - bns: الرقم بعد علامة + (مثلاً 1 من 10+1).
-           - tax:من عامود " ق.م مضافة ج.م " 
-           - unit_p: من عمود "سعر صيدلي ج.م".
-           - extra: من عمود "هامش ثابت للصيدلي".
-           - sale_p: من عمود "سعر الجمهور".
-           
-        :4.(dream) دريم لمستحضرات التجميل
-           - line_total: استخرجه من عمود "إجمالي التكلفة" أو "الإجمالي ".
-           - qty: من عمود "العدد" أو "الكمية".
-           - sale_p: من عمود "سعر الجمهور"أو"السعر" أو "المستهلك".
-           - unit_p:من عامود "سعر البيع"
-
-        قواعد عامة:
-        - ابحث عن "اسم المورد" و "رقم الفاتورة" في أعلى الورقة.
-        - في أي مورد آخر: sale_p هو سعر الجمهور، و line_total هو صافي السعر في آخر السطر.
-    """.trimIndent()
-
-    val requestBody = JSONObject().apply {
-        put("contents", JSONArray().put(JSONObject().apply {
-            put("parts", JSONArray().apply {
-                put(JSONObject().apply {
-                    put("inline_data", JSONObject().apply {
-                        put("mime_type", mimeType)
-                        put("data", base64Data)
-                    })
-                })
-                put(JSONObject().apply { put("text", prompt) })
-            })
-        }))
-        put("generationConfig", JSONObject().apply {
-            put("temperature", 0)
-            put("maxOutputTokens", 8192)
-        })
-    }
-
-    val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY"
-    val conn = URL(url).openConnection() as HttpURLConnection
-    conn.apply {
-        requestMethod = "POST"
-        setRequestProperty("Content-Type", "application/json")
-        doOutput = true
-        connectTimeout = 30000
-        readTimeout = 30000
-        outputStream.write(requestBody.toString().toByteArray())
-    }
-
-    val responseCode = conn.responseCode
-    val response = if (responseCode == 200)
-        conn.inputStream.bufferedReader().readText()
-    else {
-        val errBody = conn.errorStream?.bufferedReader()?.readText() ?: "no error body"
-        throw Exception("HTTP $responseCode: $errBody")
-    }
-
-    var text = JSONObject(response)
-        .getJSONArray("candidates")
-        .getJSONObject(0)
-        .getJSONObject("content")
-        .getJSONArray("parts")
-        .getJSONObject(0)
-        .getString("text")
-        .trim()
-
-    text = text.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-    // أضف هذا السطر هنا
-    Log.d("GEMINI_DEBUG", "البيانات الخام من جيميناي: $text")
-
-    val root = JSONObject(text)
-    val supName = root.optString("supplier_name", "").lowercase()
-    val itemsArray = root.getJSONArray("items")
-    val items = (0 until itemsArray.length()).map { i ->
-        itemsArray.getJSONObject(i).let { obj ->
-            val qty = obj.optDouble("qty", 1.0).let { if (it <= 0) 1.0 else it }
-            val bonus = obj.optDouble("bns", 0.0)
-            val lineTotal = obj.optDouble("line_total", 0.0)
-            val unitP = obj.optDouble("unit_p", 0.0)
-            val extra = obj.optDouble("extra", 0.0)
-            val rawTax = obj.optDouble("tax", 0.0)
-            
-            var pPrice = 0.0
-            var finalTax = rawTax
-            var finalSalePrice = obj.optDouble("sale_p", 0.0)
-
-            // المنطق الذكي حسب المورد:
-            if (supName.contains("overseas") || supName.contains("sina")|| supName.contains("سينا")|| supName.contains("أوفر سيز")) {
-                pPrice = unitP + extra
-                // لو ابن سينا، نقسم إجمالي الضريبة على الكمية
-                if (supName.contains("سينا") && qty > 0) {
-                    finalTax = rawTax / qty
-                }
-            }
-            else if (supName.contains("دريم") || supName.contains("dream")) {
-                // قاعدة دريم الجديدة
-                finalSalePrice = -1.0  // علامة التخطي للروبوت
-                pPrice = unitP         // سعر الشراء
-            } else if (lineTotal > 0) {
-                pPrice = lineTotal / qty
-
-            } else {
-                pPrice = unitP
-            }
-
-            // تتبع الحساب (المحطة الأولى)
-            Log.d("CALC_DEBUG", "الصنف: ${obj.optString("name")} | الحسبة: (unitP:$unitP + extra:$extra) OR (total:$lineTotal / qty:$qty) | الناتج: $pPrice")
-
-            // تقريب الأرقام لـ 3 أرقام عشرية
-            val formattedPrice = (Math.round(pPrice * 1000).toDouble() / 1000.0)
-            val formattedTax = (Math.round(finalTax * 1000).toDouble() / 1000.0)
-
-            OcrItem(
-                invoiceName = obj.optString("name", "غير معروف"),
-                quantity    = qty,
-                bonus       = bonus,
-                taxes       = formattedTax,
-                price       = formattedPrice,
-                salePrice   = finalSalePrice,
-                discount    = 0.0
-            )
-        }
-    }
-    return OcrResponse(
-        supplierName = root.optString("supplier_name", "غير معروف"),
-        invoiceNumber = root.optString("invoice_number", ""),
-        items = items
-    )
-}

@@ -3,11 +3,12 @@ package com.pharma.link.orderautomating
 import androidx.room.Database
 import androidx.room.RoomDatabase
 
-@Database(entities = [Item::class, PharmacyItem::class, SmartMapping::class], version = 13)
+@Database(entities = [Item::class, PharmacyItem::class, SmartMapping::class, SupplierDictionary::class], version = 14)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun itemDao(): ItemDao
     abstract fun pharmacyItemDao(): PharmacyItemDao
     abstract fun smartMappingDao(): SmartMappingDao
+    abstract fun supplierDictionaryDao(): SupplierDictionaryDao
 
     companion object {
         @Volatile
