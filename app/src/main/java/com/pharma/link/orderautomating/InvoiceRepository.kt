@@ -106,7 +106,8 @@ class InvoiceRepository(private val context: Context) {
             Log.d("GEMINI_DEBUG", "البيانات المستخرجة: $text")
 
             val root = JSONObject(text)
-            val supName = root.optString("supplier_name", "").lowercase()
+            val rawSupName = root.optString("supplier_name", "غير معروف")
+            val supName = rawSupName.lowercase()
             val itemsArray = root.getJSONArray("items")
             val items = (0 until itemsArray.length()).map { i ->
                 itemsArray.getJSONObject(i).let { obj ->
@@ -121,13 +122,18 @@ class InvoiceRepository(private val context: Context) {
                     var finalTax = rawTax
                     var finalSalePrice = obj.optDouble("sale_p", 0.0)
 
-                    if (supName.contains("overseas") || supName.contains("sina")|| supName.contains("سينا")|| supName.contains("أوفر سيز")) {
+                    // منطق ذكي للتعرف على المورد من الاسم الخام
+                    val isIbnsina = supName.contains("sina") || supName.contains("سينا")
+                    val isOverseas = supName.contains("overseas") || supName.contains("سيز")
+                    val isDream = supName.contains("dream") || supName.contains("دريم")
+
+                    if (isIbnsina || isOverseas) {
                         pPrice = unitP + extra
-                        if (supName.contains("سينا") && qty > 0) {
+                        if (isIbnsina && qty > 0) {
                             finalTax = rawTax / qty
                         }
                     }
-                    else if (supName.contains("دريم") || supName.contains("dream")) {
+                    else if (isDream) {
                         finalSalePrice = -1.0
                         pPrice = unitP
                     } else if (lineTotal > 0) {
@@ -151,7 +157,7 @@ class InvoiceRepository(private val context: Context) {
                 }
             }
             return OcrResponse(
-                supplierName = root.optString("supplier_name", "غير معروف"),
+                supplierName = rawSupName,
                 invoiceNumber = root.optString("invoice_number", ""),
                 items = items
             )

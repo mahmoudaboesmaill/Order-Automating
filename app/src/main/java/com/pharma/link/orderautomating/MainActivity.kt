@@ -140,7 +140,8 @@ fun InvoiceScreenWrapper(navController: NavController, sharedViewModel: SharedVi
                 }
             }
         },
-        onDismiss = { /* شاشة البداية */ }
+        onDismiss = { /* شاشة البداية */ },
+        onOpenSettings = { navController.navigate("server_settings/false") }
     )
 
     pendingOcrResult?.let { result ->

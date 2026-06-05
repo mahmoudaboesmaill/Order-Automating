@@ -52,10 +52,12 @@ fun MappingScreen(
         return
     }
 
-    if (currentIndex >= mappedItems.size) {
-        onDone(mappedItems)
-        return
+    LaunchedEffect(currentIndex) {
+        if (currentIndex >= mappedItems.size && mappedItems.isNotEmpty()) {
+            onDone(mappedItems)
+        }
     }
+    if (currentIndex >= mappedItems.size) return
 
     val currentItem = mappedItems[currentIndex]
 

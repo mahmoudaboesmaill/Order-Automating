@@ -84,9 +84,9 @@ class MappingViewModel : ViewModel() {
     fun skipCurrent() {
         val idx = _currentIndex.value
         if (idx >= _mappedItems.value.size) return
-        
-        val next = _mappedItems.value.indexOfFirst { !it.matched && _mappedItems.value.indexOf(it) > idx }
-        _currentIndex.value = if (next != -1) next else _mappedItems.value.size
+        val next = _mappedItems.value.indices
+            .firstOrNull { i -> i > idx && !_mappedItems.value[i].matched }
+        _currentIndex.value = next ?: _mappedItems.value.size
     }
 
     fun goBack(onCancel: () -> Unit) {

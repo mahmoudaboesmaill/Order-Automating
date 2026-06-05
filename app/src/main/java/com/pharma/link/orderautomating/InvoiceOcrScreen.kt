@@ -38,11 +38,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.*
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.ByteArrayOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 
 
 @Deprecated("تم نقل المفتاح للسيرفر لزيادة الأمان", level = DeprecationLevel.WARNING)
@@ -53,6 +49,7 @@ const val GEMINI_API_KEY = BuildConfig.GEMINI_API_KEY
 fun InvoiceOcrScreen(
     onResultReady: (OcrResponse) -> Unit,
     onDismiss: () -> Unit,
+    onOpenSettings: () -> Unit = {},
     viewModel: InvoiceOcrViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -213,6 +210,24 @@ fun InvoiceOcrScreen(
             }
 
         } else {
+            // أيقونة الإعدادات في الأعلى مع مراعاة الـ Status Bar
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding() // يمنع تداخل الأيقونة مع الـ Status Bar
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                contentAlignment = Alignment.TopEnd
+            ) {
+                IconButton(onClick = onOpenSettings) {
+                    Icon(
+                        Icons.Default.Settings,
+                        contentDescription = "الإعدادات",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+            }
+
             // عرض شريط تقدم تحميل قاعدة البيانات في الأعلى
             if (dbProgress < 1f) {
                 Column(
