@@ -22,20 +22,26 @@ class MappingViewModel : ViewModel() {
     private val _searchResults = MutableStateFlow<List<PharmacyItem>>(emptyList())
     val searchResults: StateFlow<List<PharmacyItem>> = _searchResults.asStateFlow()
 
+    // قائمة بالأصناف التي تم تخطيها يدوياً
+    private val skippedIndices = mutableSetOf<Int>()
+
     fun loadMappings(context: Context, supplierCode: String, ocrItems: List<OcrItem>) {
         viewModelScope.launch {
+            skippedIndices.clear()
             val db = AppDatabase.getDatabase(context)
             val mappingDao = db.smartMappingDao()
             val pharmacyDao = db.pharmacyItemDao()
             val sCode = supplierCode.trim().lowercase()
 
             val list = ocrItems.map { item ->
-                val mappingKey = item.invoiceName.trim().lowercase()
+                val mappingKey = ArabicNormalizer.normalize(item.invoiceName)
                 val learnedCode = mappingDao.getMappedCode(sCode, mappingKey)
                 if (learnedCode != null) {
                     item.copy(itmCode = learnedCode, matched = true)
                 } else {
-                    val exactMatch = pharmacyDao.getByName(item.invoiceName.trim())
+                    val normalizedName = ArabicNormalizer.normalize(item.invoiceName)
+                    val exactMatch = pharmacyDao.getByName(normalizedName)
+                                  ?: pharmacyDao.getByName(item.invoiceName.trim())
                     if (exactMatch != null) {
                         item.copy(itmCode = exactMatch.itmCode, matched = true)
                     } else {
@@ -62,7 +68,7 @@ class MappingViewModel : ViewModel() {
             if (idx < 0 || idx >= _mappedItems.value.size) return@launch
 
             val currentItem = _mappedItems.value[idx]
-            val mappingKey = currentItem.invoiceName.trim().lowercase()
+            val mappingKey = ArabicNormalizer.normalize(currentItem.invoiceName)
             val sCode = supplierCode.trim().lowercase()
 
             AppDatabase.getDatabase(context).smartMappingDao().insertMapping(
@@ -76,22 +82,40 @@ class MappingViewModel : ViewModel() {
             _searchQuery.value = ""
             _searchResults.value = emptyList()
 
-            val next = newList.indexOfFirst { !it.matched }
-            _currentIndex.value = if (next != -1) next else newList.size
+            moveToNext()
         }
     }
 
     fun skipCurrent() {
         val idx = _currentIndex.value
-        if (idx >= _mappedItems.value.size) return
-        val next = _mappedItems.value.indices
-            .firstOrNull { i -> i > idx && !_mappedItems.value[i].matched }
-        _currentIndex.value = next ?: _mappedItems.value.size
+        if (idx < 0 || idx >= _mappedItems.value.size) return
+        
+        skippedIndices.add(idx)
+        moveToNext()
+    }
+
+    private fun moveToNext() {
+        val items = _mappedItems.value
+        val idx = _currentIndex.value
+        
+        // 1. ابحث عن أول صنف "أمامك" لم يتم مطابقتة ولم يتم تخطيه
+        var next = items.indices.firstOrNull { i -> i > idx && !items[i].matched && i !in skippedIndices }
+        
+        // 2. إذا وصلنا للنهاية، ابحث عن أي صنف غير مطابق (بما فيهم اللي اتعملهم تخطي)
+        if (next == null) {
+            next = items.indices.firstOrNull { i -> !items[i].matched }
+            // إذا وجدنا صنفاً كان متخطياً، نزيله من قائمة التخطي لأننا سنعالجه الآن
+            if (next != null) skippedIndices.remove(next)
+        }
+        
+        _currentIndex.value = next ?: items.size
     }
 
     fun goBack(onCancel: () -> Unit) {
         if (_currentIndex.value > 0) {
             _currentIndex.value--
+            // عند الرجوع، نمسح الصنف الحالي من قائمة التخطي لو كان فيها
+            skippedIndices.remove(_currentIndex.value)
         } else {
             onCancel()
         }

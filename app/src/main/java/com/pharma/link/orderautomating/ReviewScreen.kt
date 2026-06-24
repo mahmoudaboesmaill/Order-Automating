@@ -30,7 +30,6 @@ fun ReviewScreen(
     items: List<OcrItem>,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
-    onUpdateHeader: (String, String) -> Unit = { _, _ -> },
     viewModel: ReviewViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -70,11 +69,9 @@ fun ReviewScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         SmallHeaderField(value = supplierCode, label = "مورد", modifier = Modifier.weight(1f)) { 
                             viewModel.updateSupplierCode(it)
-                            onUpdateHeader(it, invoiceNumber)
                         }
                         SmallHeaderField(value = invoiceNumber, label = "فاتورة", modifier = Modifier.weight(1f)) { 
                             viewModel.updateInvoiceNumber(it)
-                            onUpdateHeader(supplierCode, it)
                         }
                     }
                 }
@@ -278,7 +275,9 @@ fun MappingDialog(
 
                 LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(results) { item ->
-                        SearchResultItem(item = item) { onSelect(item) }
+                        SearchResultItem(item = item, onEditBarcode = { /* No-op in ReviewScreen */ }) { 
+                            onSelect(item) 
+                        }
                     }
                 }
 

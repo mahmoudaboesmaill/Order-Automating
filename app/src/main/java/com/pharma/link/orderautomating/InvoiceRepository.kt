@@ -107,39 +107,56 @@ class InvoiceRepository(private val context: Context) {
 
             val root = JSONObject(text)
             val rawSupName = root.optString("supplier_name", "غير معروف")
-            val supName = rawSupName.lowercase()
+            
+            // جلب الموردين من القاعدة للمقارنة الذكية
+            val db = AppDatabase.getDatabase(context)
+            val supplierDao = db.supplierDictionaryDao()
+            val allSuppliers = supplierDao.getAll()
+            
+            // محاولة إيجاد كود المورد تلقائياً
+            var autoDetectedCode = ""
+            val normalizedRawName = ArabicNormalizer.normalize(rawSupName)
+            
+            // تعديل: إذا كان الاسم المكتشف هو رقم أصلاً (مثل 198)، نعتبره الكود فوراً
+            if (rawSupName.trim().all { it.isDigit() }) {
+                autoDetectedCode = rawSupName.trim()
+            } else {
+                val matchedSupplier = allSuppliers.find { 
+                    normalizedRawName.contains(ArabicNormalizer.normalize(it.arabicName)) || 
+                    normalizedRawName.contains(it.englishName.lowercase()) 
+                }
+                if (matchedSupplier != null) autoDetectedCode = matchedSupplier.supplierCode
+            }
+
             val itemsArray = root.getJSONArray("items")
             val items = (0 until itemsArray.length()).map { i ->
                 itemsArray.getJSONObject(i).let { obj ->
                     val qty = obj.optDouble("qty", 1.0).let { if (it <= 0) 1.0 else it }
                     val bonus = obj.optDouble("bns", 0.0)
-                    val lineTotal = obj.optDouble("line_total", 0.0)
                     val unitP = obj.optDouble("unit_p", 0.0)
-                    val extra = obj.optDouble("extra", 0.0)
+                    val lineTotal = obj.optDouble("line_total", 0.0)
                     val rawTax = obj.optDouble("tax", 0.0)
+                    val extra = obj.optDouble("extra", 0.0)
                     
                     var pPrice = 0.0
                     var finalTax = rawTax
                     var finalSalePrice = obj.optDouble("sale_p", 0.0)
 
-                    // منطق ذكي للتعرف على المورد من الاسم الخام
-                    val isIbnsina = supName.contains("sina") || supName.contains("سينا")
-                    val isOverseas = supName.contains("overseas") || supName.contains("سيز")
-                    val isDream = supName.contains("dream") || supName.contains("دريم")
-
-                    if (isIbnsina || isOverseas) {
-                        pPrice = unitP + extra
-                        if (isIbnsina && qty > 0) {
-                            finalTax = rawTax / qty
+                    // منطق الحساب بناءً على كود المورد المكتشف أو الاسم
+                    when {
+                        autoDetectedCode == "29" || normalizedRawName.contains("سينا") -> { // ابن سينا
+                            pPrice = unitP + extra
+                            if (qty > 0) finalTax = rawTax / qty
                         }
-                    }
-                    else if (isDream) {
-                        finalSalePrice = -1.0
-                        pPrice = unitP
-                    } else if (lineTotal > 0) {
-                        pPrice = lineTotal / qty
-                    } else {
-                        pPrice = unitP
+                        autoDetectedCode == "38" || normalizedRawName.contains("سيز") -> { // أوفر سيز
+                            pPrice = unitP + extra
+                        }
+                        autoDetectedCode == "175" || normalizedRawName.contains("دريم") -> { // دريم
+                            finalSalePrice = -1.0
+                            pPrice = unitP
+                        }
+                        lineTotal > 0 -> pPrice = lineTotal / qty
+                        else -> pPrice = unitP
                     }
 
                     val formattedPrice = (Math.round(pPrice * 1000).toDouble() / 1000.0)
@@ -152,12 +169,12 @@ class InvoiceRepository(private val context: Context) {
                         taxes       = formattedTax,
                         price       = formattedPrice,
                         salePrice   = finalSalePrice,
-                        discount    = 0.0
+                        matched     = false
                     )
                 }
             }
             return OcrResponse(
-                supplierName = rawSupName,
+                supplierName = if (autoDetectedCode.isNotEmpty()) autoDetectedCode else rawSupName,
                 invoiceNumber = root.optString("invoice_number", ""),
                 items = items
             )

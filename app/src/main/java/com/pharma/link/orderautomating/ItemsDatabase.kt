@@ -130,7 +130,7 @@ object ItemsDatabase {
     }
 
     suspend fun search(context: Context, query: String, limit: Int = 100): List<PharmacyItem> {
-        val q = query.trim()
+        val q = ArabicNormalizer.normalize(query)
         if (q.length < 2) return emptyList()
         
         val dao = AppDatabase.getDatabase(context).pharmacyItemDao()
@@ -144,11 +144,37 @@ object ItemsDatabase {
         val words = q.split(" ").filter { it.length >= 2 }
         val searchPattern = if (words.size > 1) words.joinToString("%") { it } else q
         
-        return dao.searchItems(searchPattern, limit)
+        val results = dao.searchItems(searchPattern, limit).toMutableList()
+
+        // بحث إضافي بالنص الأصلي لو النتائج قليلة
+        if (results.size < 5 && query.trim() != q) {
+            val fallback = dao.searchItems(query.trim(), limit)
+            fallback.forEach { item ->
+                if (results.none { it.itmCode == item.itmCode }) results.add(item)
+            }
+        }
+
+        // بحث عربي محسّن
+        if (q.any { it.code in 0x0600..0x06FF }) {
+            val arabicResults = dao.searchByNormalizedArabic(q, 50)
+            arabicResults.forEach { item ->
+                if (results.none { it.itmCode == item.itmCode }) results.add(item)
+            }
+        }
+
+        return results.take(limit)
     }
 
     suspend fun getByCode(context: Context, itmCode: String): PharmacyItem? =
         AppDatabase.getDatabase(context).pharmacyItemDao().getByCode(itmCode)
 
     suspend fun count(context: Context) = AppDatabase.getDatabase(context).pharmacyItemDao().getCount()
+
+    suspend fun addNewItem(context: Context, item: PharmacyItem) = withContext(Dispatchers.IO) {
+        AppDatabase.getDatabase(context).pharmacyItemDao().insertItem(item)
+    }
+
+    suspend fun updateItem(context: Context, item: PharmacyItem) = withContext(Dispatchers.IO) {
+        AppDatabase.getDatabase(context).pharmacyItemDao().updateItem(item)
+    }
 }

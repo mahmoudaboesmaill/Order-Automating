@@ -9,7 +9,6 @@ import android.graphics.Matrix
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
-import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
@@ -38,11 +37,6 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.*
-import java.io.ByteArrayOutputStream
-
-
-@Deprecated("تم نقل المفتاح للسيرفر لزيادة الأمان", level = DeprecationLevel.WARNING)
-const val GEMINI_API_KEY = BuildConfig.GEMINI_API_KEY
 
 
 @Composable
@@ -380,19 +374,5 @@ private fun uriToBitmap(context: android.content.Context, uri: Uri): Bitmap? {
     }
 }
 
-private fun bitmapToBase64(bitmap: Bitmap): String {
-    val maxW = 1600; val maxH = 2400
-    val scale = minOf(maxW.toFloat() / bitmap.width, maxH.toFloat() / bitmap.height, 1f)
-    val scaled = if (scale < 1f)
-        Bitmap.createScaledBitmap(
-            bitmap,
-            (bitmap.width * scale).toInt(),
-            (bitmap.height * scale).toInt(), true
-        )
-    else bitmap
-    val stream = ByteArrayOutputStream()
-    scaled.compress(Bitmap.CompressFormat.JPEG, 85, stream)
-    return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
-}
 
 

@@ -1,6 +1,7 @@
 package com.pharma.link.orderautomating
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -26,13 +27,20 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.activity.enableEdgeToEdge
+import com.pharma.link.orderautomating.ui.theme.OrderAutomatingTheme
 import kotlinx.coroutines.*
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
-            MaterialTheme { AppNavigation() }
+            OrderAutomatingTheme { 
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    AppNavigation() 
+                }
+            }
         }
     }
 }
@@ -126,14 +134,24 @@ fun InvoiceScreenWrapper(navController: NavController, sharedViewModel: SharedVi
 
     InvoiceOcrScreen(
         onResultReady = { result ->
-            val detectedName = result.supplierName.lowercase()
+            val detectedNameOrCode = result.supplierName.trim()
             
             scope.launch {
-                val matchedCode = sharedViewModel.findSupplierCodeByName(context, detectedName) ?: ""
+                // إذا كان الاسم المكتشف عبارة عن أرقام، نعتبره الكود مباشرة
+                val matchedCode = if (detectedNameOrCode.all { it.isDigit() }) {
+                    detectedNameOrCode
+                } else {
+                    sharedViewModel.findSupplierCodeByName(context, detectedNameOrCode.lowercase()) ?: ""
+                }
                 
                 if (matchedCode.isNotBlank()) {
-                    sharedViewModel.setOcrResult(matchedCode, result.invoiceNumber, result.items)
-                    navController.navigate("mapping/$matchedCode/${result.invoiceNumber}")
+                    val invNum = result.invoiceNumber.ifBlank { "0" }.replace("/", "-")
+                    sharedViewModel.setOcrResult(matchedCode, invNum, result.items)
+                    try {
+                        navController.navigate("mapping/$matchedCode/$invNum")
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Navigation error", e)
+                    }
                 } else {
                     tempSupplierCode = ""
                     pendingOcrResult = result
@@ -163,12 +181,20 @@ fun InvoiceScreenWrapper(navController: NavController, sharedViewModel: SharedVi
             },
             confirmButton = {
                 Button(onClick = {
-                    if (tempSupplierCode.isNotBlank()) {
-                        val res = pendingOcrResult!!
-                        val code = tempSupplierCode
+                    val currentResult = pendingOcrResult
+                    if (tempSupplierCode.isNotBlank() && currentResult != null) {
+                        val code = tempSupplierCode.trim()
+                        val invNum = currentResult.invoiceNumber.ifBlank { "0" }.replace("/", "-")
+                        
                         pendingOcrResult = null
-                        sharedViewModel.setOcrResult(code, res.invoiceNumber, res.items)
-                        navController.navigate("mapping/$code/${res.invoiceNumber}")
+                        sharedViewModel.setOcrResult(code, invNum, currentResult.items)
+                        
+                        // استخدام try-catch بسيط لحماية التنقل
+                        try {
+                            navController.navigate("mapping/$code/$invNum")
+                        } catch (e: Exception) {
+                            Log.e("MainActivity", "Navigation error", e)
+                        }
                     }
                 }) { Text("موافق") }
             },

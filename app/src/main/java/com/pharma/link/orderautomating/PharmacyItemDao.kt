@@ -22,6 +22,21 @@ interface PharmacyItemDao {
     """)
     suspend fun searchItems(query: String, limit: Int = 100): List<PharmacyItem>
 
+    @Query("""
+        SELECT * FROM pharmacy_items
+        WHERE REPLACE(REPLACE(REPLACE(REPLACE(LOWER(nameAr),'أ','ا'),'إ','ا'),'آ','ا'),'ة','ه')
+              LIKE '%' || :normalizedQuery || '%'
+        ORDER BY
+            CASE
+                WHEN LOWER(nameAr) = :normalizedQuery THEN 1
+                WHEN LOWER(nameEn) = :normalizedQuery THEN 2
+                WHEN LOWER(nameAr) LIKE :normalizedQuery || '%' THEN 3
+                ELSE 4
+            END
+        LIMIT :limit
+    """)
+    suspend fun searchByNormalizedArabic(normalizedQuery: String, limit: Int = 50): List<PharmacyItem>
+
     @Query("SELECT * FROM pharmacy_items WHERE nameEn = :name LIMIT 1")
     suspend fun getByName(name: String): PharmacyItem?
 
@@ -36,4 +51,10 @@ interface PharmacyItemDao {
 
     @Query("SELECT COUNT(*) FROM pharmacy_items")
     suspend fun getCount(): Int
+
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
+    suspend fun insertItem(item: PharmacyItem)
+
+    @androidx.room.Update
+    suspend fun updateItem(item: PharmacyItem)
 }
