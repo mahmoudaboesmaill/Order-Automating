@@ -121,6 +121,20 @@ class ReviewViewModel : ViewModel() {
                     )
                 }
                 val result = repository.sendInvoice(_supplierCode.value, _invoiceNumber.value, invoiceItems)
+                
+                // حفظ السجل بعد الإرسال
+                val totalPrice = invoiceItems.sumOf { it.price * it.quantity }
+                AppDatabase.getDatabase(context).invoiceRecordDao().insert(
+                    InvoiceRecord(
+                        supplierCode  = _supplierCode.value,
+                        supplierName  = _supplierCode.value,   // هيتحسن لما نضيف اسم المورد
+                        invoiceNumber = _invoiceNumber.value,
+                        itemsCount    = invoiceItems.size,
+                        totalPrice    = totalPrice,
+                        status        = if (result.startsWith("✅")) "success" else "failed"
+                    )
+                )
+
                 _loading.value = false
                 _status.value = result
             } catch (e: Exception) {

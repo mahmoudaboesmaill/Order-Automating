@@ -2,4 +2,10 @@
 <resources>
 
     <style name="Theme.OrderAutomating" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <style name="Theme.OrderAutomating.SplashScreen" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#16A34A</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.OrderAutomating</item>
+    </style>
 </resources>

@@ -19,11 +19,7 @@ object ServerManager {
     private const val KEY_SELECTED = "selected_id"
 
     // سيرفرات افتراضية
-    private val defaultServers = listOf(
-        ServerConfig("home",     "البيت",       "192.168.1.4"),
-        ServerConfig("pharma1",  "الصيدلية 1",  "192.168.1.184"),
-        ServerConfig("pharma2",  "الصيدلية 2",  "192.168.1.185")
-    )
+    private val defaultServers = emptyList<ServerConfig>()
 
     fun getServers(context: Context): List<ServerConfig> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -84,5 +80,5 @@ object ServerManager {
     }
 
     fun getSelectedUrl(context: Context): String =
-        getSelectedServer(context)?.url ?: "http://192.168.1.184:8080"
+        getSelectedServer(context)?.url ?: ""
 }

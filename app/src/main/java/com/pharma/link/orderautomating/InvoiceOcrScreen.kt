@@ -44,6 +44,7 @@ fun InvoiceOcrScreen(
     onResultReady: (OcrResponse) -> Unit,
     onDismiss: () -> Unit,
     onOpenSettings: () -> Unit = {},
+    onOpenHistory: () -> Unit = {},
     viewModel: InvoiceOcrViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -219,6 +220,45 @@ fun InvoiceOcrScreen(
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(32.dp)
                     )
+                }
+                IconButton(onClick = onOpenHistory) {
+                    Icon(
+                        Icons.Default.History,
+                        contentDescription = "سجل الفواتير",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+            }
+
+            // تحذير لو مفيش سيرفر محدد
+            val hasServer = remember { ServerManager.getSelectedServer(context) != null }
+            if (!hasServer) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "لم يتم إعداد السيرفر بعد. اضغط ⚙️ للإضافة.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
                 }
             }
 

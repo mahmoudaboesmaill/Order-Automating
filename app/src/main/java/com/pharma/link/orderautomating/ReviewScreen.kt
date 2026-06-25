@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.pharma.link.orderautomating.ui.theme.SuccessGreen
 import kotlinx.coroutines.*
 
 @Composable
@@ -41,6 +42,17 @@ fun ReviewScreen(
     val loading by viewModel.loading.collectAsState()
     val itemToRemapIndex by viewModel.itemToRemapIndex.collectAsState()
 
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(status) {
+        if (status.startsWith("✅")) {
+            snackbarHostState.showSnackbar(
+                message = status,
+                duration = SnackbarDuration.Short
+            )
+        }
+    }
+
     LaunchedEffect(Unit) {
         viewModel.init(initialSupplierCode, initialInvoiceNumber, items)
     }
@@ -57,6 +69,17 @@ fun ReviewScreen(
     }
 
     Scaffold(
+        snackbarHost = {
+            SnackbarHost(snackbarHostState) { data ->
+                Snackbar(
+                    snackbarData = data,
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(16.dp),
+                    shape = MaterialTheme.shapes.large
+                )
+            }
+        },
         topBar = {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -116,10 +139,14 @@ fun ReviewScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = if (status.startsWith("✅")) Color(0xFFE8F5E9) else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f)
+                        containerColor = if (status.startsWith("✅"))
+                            MaterialTheme.colorScheme.primaryContainer
+                        else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f)
                     )
                 ) {
-                    Text(status, modifier = Modifier.padding(12.dp), color = if (status.startsWith("✅")) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    Text(status, modifier = Modifier.padding(12.dp), color = if (status.startsWith("✅"))
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
             }
 
@@ -159,7 +186,27 @@ fun ReviewItemCard(item: OcrItem, onDelete: () -> Unit, onRemap: () -> Unit, onU
                         )
                     )
                 }
-                IconButton(onClick = onDelete) { 
+                var showDeleteConfirm by remember { mutableStateOf(false) }
+
+                if (showDeleteConfirm) {
+                    AlertDialog(
+                        onDismissRequest = { showDeleteConfirm = false },
+                        icon = { Icon(Icons.Default.DeleteSweep, null, tint = MaterialTheme.colorScheme.error) },
+                        title = { Text("حذف الصنف؟", fontWeight = FontWeight.Bold) },
+                        text = { Text("هيتحذف \"${item.invoiceName}\" من الفاتورة. مش هتقدر ترجعه.") },
+                        confirmButton = {
+                            Button(
+                                onClick = { showDeleteConfirm = false; onDelete() },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                            ) { Text("نعم، احذف") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showDeleteConfirm = false }) { Text("إلغاء") }
+                        }
+                    )
+                }
+
+                IconButton(onClick = { showDeleteConfirm = true }) {
                     Icon(Icons.Default.DeleteSweep, null, tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)) 
                 }
             }
@@ -223,19 +270,6 @@ fun SmallHeaderField(value: String, label: String, modifier: Modifier, onValueCh
     )
 }
 
-@Composable
-fun SmallEditField(value: String, label: String, modifier: Modifier, onValueChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label, fontSize = 10.sp) },
-        modifier = modifier,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        textStyle = MaterialTheme.typography.bodySmall,
-        singleLine = true,
-        shape = MaterialTheme.shapes.small
-    )
-}
 
 @Composable
 fun MappingDialog(
