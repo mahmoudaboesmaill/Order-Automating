@@ -43,6 +43,10 @@ fun BarcodeScannerScreen(
         )
     }
     var detected by remember { mutableStateOf(false) }
+    
+    // تحسين الدقة: نحتاج لرؤية نفس الباركود 3 مرات متتالية للتأكد
+    var lastBarcode by remember { mutableStateOf("") }
+    var consecutiveHits by remember { mutableIntStateOf(0) }
 
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -75,8 +79,17 @@ fun BarcodeScannerScreen(
                                 analysis.setAnalyzer(executor) { imageProxy ->
                                     if (!detected) {
                                         processImage(imageProxy) { barcode ->
-                                            detected = true
-                                            onBarcodeDetected(barcode)
+                                            if (barcode == lastBarcode) {
+                                                consecutiveHits++
+                                            } else {
+                                                lastBarcode = barcode
+                                                consecutiveHits = 1
+                                            }
+
+                                            if (consecutiveHits >= 3) {
+                                                detected = true
+                                                onBarcodeDetected(barcode)
+                                            }
                                         }
                                     } else {
                                         imageProxy.close()

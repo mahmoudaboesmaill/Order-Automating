@@ -246,6 +246,7 @@ fun MappingDialog(
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<PharmacyItem>>(emptyList()) }
+    var showAddItemDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     Dialog(onDismissRequest = onDismiss) {
@@ -254,8 +255,19 @@ fun MappingDialog(
             shape = MaterialTheme.shapes.large
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("تعديل مطابقة الصنف", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text(invoiceName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("تعديل مطابقة الصنف", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(invoiceName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                    }
+                    IconButton(onClick = { showAddItemDialog = true }) {
+                        Icon(Icons.Default.AddCircle, contentDescription = "إضافة صنف جديد", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 
                 Spacer(Modifier.height(16.dp))
 
@@ -286,5 +298,19 @@ fun MappingDialog(
                 }
             }
         }
+    }
+
+    if (showAddItemDialog) {
+        AddNewItemDialog(
+            initialName = query.ifBlank { invoiceName },
+            onDismiss = { showAddItemDialog = false },
+            onConfirm = { newItem ->
+                scope.launch {
+                    ItemsDatabase.addNewItem(context, newItem)
+                    showAddItemDialog = false
+                    results = ItemsDatabase.search(context, query) // تحديث البحث
+                }
+            }
+        )
     }
 }

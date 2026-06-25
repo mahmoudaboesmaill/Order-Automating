@@ -15,7 +15,15 @@ interface SupplierDictionaryDao {
     @Query("SELECT * FROM supplier_dictionary")
     suspend fun getAll(): List<SupplierDictionary>
 
-    @Query("SELECT supplierCode FROM supplier_dictionary WHERE LOWER(arabicName) LIKE '%' || LOWER(:name) || '%' OR LOWER(englishName) LIKE '%' || LOWER(:name) || '%' LIMIT 1")
+    @Query("""
+        SELECT supplierCode FROM supplier_dictionary
+        WHERE
+            REPLACE(REPLACE(REPLACE(REPLACE(LOWER(arabicName),'أ','ا'),'إ','ا'),'آ','ا'),'ة','ه')
+            LIKE '%' || :name || '%'
+            OR LOWER(englishName) LIKE '%' || :name || '%'
+            OR supplierCode = :name
+        LIMIT 1
+    """)
     suspend fun findByName(name: String): String?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

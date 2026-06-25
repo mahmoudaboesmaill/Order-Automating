@@ -78,8 +78,8 @@ class ReviewViewModel : ViewModel() {
             val items = _editableItems.value.toMutableList()
             if (index in items.indices) {
                 val currentItem = items[index]
-                val mappingKey = currentItem.invoiceName.trim().lowercase()
-                val sCode = _supplierCode.value.trim().lowercase()
+                val mappingKey = ArabicNormalizer.normalize(currentItem.invoiceName)
+                val sCode = ArabicNormalizer.normalize(_supplierCode.value)
 
                 AppDatabase.getDatabase(context).smartMappingDao().insertMapping(
                     SmartMapping(sCode, mappingKey, newItem.itmCode)

@@ -62,6 +62,22 @@ class MappingViewModel : ViewModel() {
         }
     }
 
+    /**
+     * وظيفة ذكية: تبحث عن الباركود، وإذا وجدت صنفاً واحداً فقط مطابقاً تماماً، تختاره وتنتقل للتالي
+     */
+    fun selectByBarcode(context: Context, supplierCode: String, barcode: String) {
+        _searchQuery.value = barcode
+        viewModelScope.launch {
+            val results = ItemsDatabase.search(context, barcode)
+            _searchResults.value = results
+            
+            // إذا وجدنا صنفاً واحداً فقط مطابقاً تماماً للباركود
+            if (results.size == 1 && results[0].barcode == barcode) {
+                selectItem(context, supplierCode, results[0])
+            }
+        }
+    }
+
     fun selectItem(context: Context, supplierCode: String, pharmacyItem: PharmacyItem) {
         viewModelScope.launch {
             val idx = _currentIndex.value

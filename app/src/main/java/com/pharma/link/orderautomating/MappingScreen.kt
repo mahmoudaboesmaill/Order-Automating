@@ -202,7 +202,7 @@ fun MappingScreen(
             BarcodeScannerScreen(
                 onBarcodeDetected = { barcode ->
                     showScanner = false
-                    viewModel.search(context, barcode)
+                    viewModel.selectByBarcode(context, supplierCode, barcode)
                 },
                 onDismiss = { showScanner = false }
             )

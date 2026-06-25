@@ -141,7 +141,7 @@ fun InvoiceScreenWrapper(navController: NavController, sharedViewModel: SharedVi
                 val matchedCode = if (detectedNameOrCode.all { it.isDigit() }) {
                     detectedNameOrCode
                 } else {
-                    sharedViewModel.findSupplierCodeByName(context, detectedNameOrCode.lowercase()) ?: ""
+                    sharedViewModel.findSupplierCodeByName(context, ArabicNormalizer.normalize(detectedNameOrCode)) ?: ""
                 }
                 
                 if (matchedCode.isNotBlank()) {
@@ -205,5 +205,3 @@ fun InvoiceScreenWrapper(navController: NavController, sharedViewModel: SharedVi
     }
 }
 
-// الكومبوزابلات الأخرى (InvoiceScreen, ItemRow, AddItemDialog) تبقى كما هي لكنها لم تعد مستخدمة في الـ NavHost الرئيسي 
-// حيث استبدلنا منطق الـ when بـ NavHost. إذا كنت تريد إبقاء InvoiceScreen كخيار يدوي، يمكن إضافتها للـ NavHost.
