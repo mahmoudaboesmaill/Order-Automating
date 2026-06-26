@@ -206,25 +206,26 @@ fun InvoiceOcrScreen(
 
         } else {
             // أيقونة الإعدادات في الأعلى مع مراعاة الـ Status Bar
-            Box(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .statusBarsPadding() // يمنع تداخل الأيقونة مع الـ Status Bar
+                    .statusBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-                contentAlignment = Alignment.TopEnd
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onOpenSettings) {
-                    Icon(
-                        Icons.Default.Settings,
-                        contentDescription = "الإعدادات",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
                 IconButton(onClick = onOpenHistory) {
                     Icon(
                         Icons.Default.History,
                         contentDescription = "سجل الفواتير",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+                IconButton(onClick = onOpenSettings) {
+                    Icon(
+                        Icons.Default.Settings,
+                        contentDescription = "الإعدادات",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(32.dp)
                     )

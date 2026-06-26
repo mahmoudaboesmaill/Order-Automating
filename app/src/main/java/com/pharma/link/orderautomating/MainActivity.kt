@@ -34,9 +34,14 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.pharma.link.orderautomating.ui.theme.OrderAutomatingTheme
 import kotlinx.coroutines.*
 
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.ui.res.painterResource
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen()
+        installSplashScreen() // لا نستخدم التحكم في الوقت هنا لنسمح لـ Compose بالبدء فوراً
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
@@ -63,12 +68,28 @@ fun AppNavigation() {
     val navController = rememberNavController()
     val sharedViewModel: SharedViewModel = viewModel()
     
-    // تحميل قاعدة البيانات في الخلفية فور فتح التطبيق
+    var showSplash by remember { mutableStateOf(true) }
+
     LaunchedEffect(Unit) {
-        ItemsDatabase.load(context)
+        // تحميل البيانات في الخلفية بدون تعطيل الـ Main Thread
+        withContext(Dispatchers.IO) {
+            ItemsDatabase.load(context)
+        }
+        delay(1500) // تقليل الوقت قليلاً لسرعة الاستجابة
+        showSplash = false
     }
 
-    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+    if (showSplash) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Image(
+                painter = painterResource(id = R.drawable.splash_icon),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.FillBounds
+            )
+        }
+    } else {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         NavHost(navController = navController, startDestination = Routes.INVOICE) {
             composable(Routes.INVOICE) {
                 InvoiceScreenWrapper(navController, sharedViewModel)
@@ -134,6 +155,7 @@ fun AppNavigation() {
             }
         }
     }
+}
 }
 
 @Composable

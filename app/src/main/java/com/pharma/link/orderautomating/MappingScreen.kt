@@ -2,6 +2,8 @@ package com.pharma.link.orderautomating
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -67,41 +69,55 @@ fun MappingScreen(
 
     Scaffold(
         topBar = {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("مطابقة الأصناف", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold)
                     Spacer(Modifier.weight(1f))
                     val progress = (currentIndex + 1).toFloat() / mappedItems.size
-                    Box(contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(progress = progress, modifier = Modifier.size(40.dp), strokeWidth = 4.dp)
-                        Text("${(progress * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, fontSize = 8.sp)
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(48.dp)) {
+                        CircularProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxSize(),
+                            strokeWidth = 4.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                        )
+                        Text("${(progress * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                     }
                 }
-                Text("صنف ${currentIndex + 1} من ${mappedItems.size}", color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.bodySmall)
+                Text("صنف ${currentIndex + 1} من ${mappedItems.size}", color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.titleSmall)
             }
         },
         bottomBar = {
-            Surface(tonalElevation = 12.dp, shadowElevation = 12.dp) {
-                Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Surface(tonalElevation = 8.dp, shadowElevation = 8.dp) {
+                Row(
+                    modifier = Modifier
+                        .navigationBarsPadding()
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // زر السابق/إلغاء على اليسار (في RTL) أو اليمين (في LTR) - هنا نضعه كزر ثانوي
                     OutlinedButton(
                         onClick = { viewModel.goBack(onBack) },
-                        modifier = Modifier.weight(1f).height(56.dp),
-                        shape = MaterialTheme.shapes.large
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        shape = MaterialTheme.shapes.medium
                     ) { 
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text(if (currentIndex > 0) "السابق" else "إلغاء")
                     }
 
+                    // زر تخطي (الأكشن الأساسي للتقدم) على اليمين
                     Button(
                         onClick = { viewModel.skipCurrent() },
-                        modifier = Modifier.weight(1f).height(56.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
-                        shape = MaterialTheme.shapes.large
+                        modifier = Modifier.weight(1f).height(50.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                        shape = MaterialTheme.shapes.medium
                     ) {
                         Text("تخطي")
                         Spacer(Modifier.width(8.dp))
-                        Icon(Icons.AutoMirrored.Filled.ArrowForward, null)
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, null, modifier = Modifier.size(18.dp))
                     }
                 }
             }
@@ -112,26 +128,37 @@ fun MappingScreen(
             // كارت الصنف الحالي "البطل"
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)),
-                shape = MaterialTheme.shapes.extraLarge
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)),
+                shape = MaterialTheme.shapes.extraLarge,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
             ) {
-                Column(modifier = Modifier.padding(20.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.ReceiptLong, null, tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.Default.ReceiptLong, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("الاسم في الفاتورة:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        Text("الاسم في الفاتورة:", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                     }
-                    Text(currentItem.invoiceName, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(12.dp))
-                    Row {
-                        SuggestionChip(onClick = {}, label = { Text("كمية: ${currentItem.quantity}") }, icon = { Icon(Icons.Default.Inventory, null, modifier = Modifier.size(16.dp)) })
-                        Spacer(Modifier.width(8.dp))
-                        SuggestionChip(onClick = {}, label = { Text("خصم: ${currentItem.discount}%") }, icon = { Icon(Icons.Default.Percent, null, modifier = Modifier.size(16.dp)) })
+                    Spacer(Modifier.height(4.dp))
+                    Text(currentItem.invoiceName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, minLines = 2)
+                    
+                    Spacer(Modifier.height(16.dp))
+                    
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        InfoChip(
+                            text = "كمية: ${currentItem.quantity}",
+                            icon = Icons.Default.Inventory,
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        )
+                        InfoChip(
+                            text = "خصم: ${currentItem.discount}%",
+                            icon = Icons.Default.Percent,
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+                        )
                     }
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(20.dp))
 
             // شريط البحث "العائم"
             OutlinedTextField(
@@ -377,7 +404,39 @@ fun SearchResultItem(item: PharmacyItem, onEditBarcode: () -> Unit, onClick: () 
                     modifier = Modifier.size(20.dp)
                 )
             }
-            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.outlineVariant)
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.outlineVariant)
+        }
+    }
+}
+
+@Composable
+fun InfoChip(
+    text: String,
+    icon: ImageVector,
+    containerColor: androidx.compose.ui.graphics.Color
+) {
+    Surface(
+        color = containerColor,
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
