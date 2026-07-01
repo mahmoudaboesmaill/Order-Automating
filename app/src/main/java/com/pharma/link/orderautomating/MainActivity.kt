@@ -33,6 +33,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.pharma.link.orderautomating.ui.theme.OrderAutomatingTheme
 import kotlinx.coroutines.*
+import java.io.File
 
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.Image
@@ -42,6 +43,11 @@ import androidx.compose.ui.res.painterResource
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen() // لا نستخدم التحكم في الوقت هنا لنسمح لـ Compose بالبدء فوراً
+
+        // حذف ملف الـ mapping القديم لو موجود
+        val oldFile = File(filesDir, "supplier_mapping.json")
+        if (oldFile.exists()) oldFile.delete()
+
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {

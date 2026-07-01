@@ -2,16 +2,24 @@ package com.pharma.link.orderautomating
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [Item::class, PharmacyItem::class, SmartMapping::class, SupplierDictionary::class, InvoiceRecord::class], version = 15)
+@Database(
+    entities = [Item::class, PharmacyItem::class, SmartMapping::class, 
+                SupplierDictionary::class, InvoiceRecord::class, 
+                SupplierProfile::class], 
+    version = 16
+)
+@TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun itemDao(): ItemDao
     abstract fun pharmacyItemDao(): PharmacyItemDao
     abstract fun smartMappingDao(): SmartMappingDao
     abstract fun supplierDictionaryDao(): SupplierDictionaryDao
     abstract fun invoiceRecordDao(): InvoiceRecordDao
+    abstract fun supplierProfileDao(): SupplierProfileDao
 
     companion object {
         private val MIGRATION_13_14 = object : Migration(13, 14) {
@@ -45,6 +53,21 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS supplier_profiles (
+                        supplierCode TEXT NOT NULL PRIMARY KEY,
+                        priceFormula TEXT NOT NULL DEFAULT 'UNIT_PRICE',
+                        taxMode TEXT NOT NULL DEFAULT 'PER_INVOICE',
+                        hasSalePrice INTEGER NOT NULL DEFAULT 1,
+                        hasBonus INTEGER NOT NULL DEFAULT 1,
+                        columnHint TEXT NOT NULL DEFAULT ''
+                    )
+                """)
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -55,7 +78,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "order_database"
                 )
-                .addMigrations(MIGRATION_13_14, MIGRATION_14_15)
+                .addMigrations(MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
                 .build()
                 INSTANCE = instance
                 instance

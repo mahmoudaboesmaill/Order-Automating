@@ -2,24 +2,24 @@ package com.pharma.link.orderautomating.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// ===== الألوان الرئيسية — أخضر طبي =====
-val PharmaGreen80      = Color(0xFF86EFAC)   // Light mode primary dark
-val PharmaGreen40      = Color(0xFF16A34A)   // Light mode primary
-val PharmaGreenDark80  = Color(0xFF4ADE80)   // Dark mode primary light
-val PharmaGreenDark40  = Color(0xFF15803D)   // Dark mode primary
+// ===== Primary — تيل طبي هادئ =====
+val PharmaPrimary80    = Color(0xFF99D6CF)   // Light mode primary variant
+val PharmaPrimary40    = Color(0xFF0F766E)   // Light mode primary (تيل داكن)
+val PharmaPrimaryDark80= Color(0xFF2DD4BF)   // Dark mode primary light
+val PharmaPrimaryDark40= Color(0xFF0D9488)   // Dark mode primary
 
-// ===== الألوان الثانوية — تيل هادي =====
-val PharmaTeal80       = Color(0xFF5EEAD4)
-val PharmaTeal40       = Color(0xFF0F766E)
-val PharmaTealDark80   = Color(0xFF2DD4BF)
-val PharmaTealDark40   = Color(0xFF0D9488)
+// ===== Secondary — أزرق رمادي =====
+val PharmaSecondary80  = Color(0xFFB2C8D8)
+val PharmaSecondary40  = Color(0xFF4A6FA5)
+val PharmaSecDark80    = Color(0xFF93C5FD)
+val PharmaSecDark40    = Color(0xFF1E40AF)
 
-// ===== اللون الثالث — أزرق معلوماتي =====
-val PharmaBlue80       = Color(0xFF93C5FD)
-val PharmaBlue40       = Color(0xFF2563EB)
+// ===== Tertiary =====
+val PharmaTertiary80   = Color(0xFF86EFAC)
+val PharmaTertiary40   = Color(0xFF16A34A)
 
 // ===== ألوان الحالة =====
-val SuccessGreen       = Color(0xFF166534)   // نص النجاح
-val SuccessGreenBg     = Color(0xFFDCFCE7)   // خلفية النجاح (Light)
-val SuccessGreenBgDark = Color(0xFF14532D)   // خلفية النجاح (Dark)
+val SuccessGreen       = Color(0xFF166534)
+val SuccessGreenBg     = Color(0xFFDCFCE7)
+val SuccessGreenBgDark = Color(0xFF14532D)
 val ErrorRed           = Color(0xFFDC2626)

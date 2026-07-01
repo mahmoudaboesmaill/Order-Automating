@@ -37,6 +37,8 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.*
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 
 
 @Composable
@@ -150,7 +152,8 @@ fun InvoiceOcrScreen(
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(24.dp),
+                    .navigationBarsPadding()
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
@@ -205,30 +208,35 @@ fun InvoiceOcrScreen(
             }
 
         } else {
-            // أيقونة الإعدادات في الأعلى مع مراعاة الـ Status Bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onOpenHistory) {
-                    Icon(
-                        Icons.Default.History,
-                        contentDescription = "سجل الفواتير",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-                IconButton(onClick = onOpenSettings) {
-                    Icon(
-                        Icons.Default.Settings,
-                        contentDescription = "الإعدادات",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(32.dp)
-                    )
+            // أيقونة الإعدادات في الأعلى مع مراعاة الـ Status Bar والـ Notch
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(
+                            WindowInsets.safeContent.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+                        )
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onOpenHistory) {
+                        Icon(
+                            Icons.Default.History,
+                            contentDescription = "سجل الفواتير",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = "الإعدادات",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
                 }
             }
 
@@ -273,7 +281,7 @@ fun InvoiceOcrScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     LinearProgressIndicator(
-                        progress = dbProgress,
+                        progress = { dbProgress },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 32.dp)
@@ -381,7 +389,7 @@ fun ModernActionCard(title: String, subtitle: String, icon: androidx.compose.ui.
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
             Spacer(Modifier.weight(1f))
-            Icon(Icons.Default.ChevronRight, null, tint = color.copy(alpha = 0.5f))
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = color.copy(alpha = 0.5f))
         }
     }
 }
@@ -414,6 +422,3 @@ private fun uriToBitmap(context: android.content.Context, uri: Uri): Bitmap? {
         null
     }
 }
-
-
-

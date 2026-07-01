@@ -16,15 +16,15 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 private val DarkColorScheme = darkColorScheme(
-    primary    = PharmaGreenDark80,
-    secondary  = PharmaTealDark80,
-    tertiary   = PharmaBlue80
+    primary   = PharmaPrimaryDark80,
+    secondary = PharmaSecDark80,
+    tertiary  = PharmaTertiary80
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary    = PharmaGreen40,
-    secondary  = PharmaTeal40,
-    tertiary   = PharmaBlue40
+    primary   = PharmaPrimary40,
+    secondary = PharmaSecondary40,
+    tertiary  = PharmaTertiary40
 )
 
 @Composable

@@ -35,6 +35,7 @@ object ItemsDatabase {
         
         // تحميل الموردين الافتراضيين
         seedDefaultSuppliers(context)
+        seedDefaultProfiles(context)
 
         // إذا كانت فارغة، حمل البيانات
         if (currentCount < 1000) { 
@@ -60,6 +61,54 @@ object ItemsDatabase {
                 SupplierDictionary(arabicName = "دريم لمستحضرات التجميل", englishName = "dream cosmetics", supplierCode = "175")
             )
             defaults.forEach { dao.insert(it) }
+        }
+    }
+
+    private suspend fun seedDefaultProfiles(context: Context) {
+        val dao = AppDatabase.getDatabase(context).supplierProfileDao()
+        if (dao.getAll().isEmpty()) {
+            dao.insertAll(listOf(
+                SupplierProfile(
+                    supplierCode = "29",
+                    priceFormula = PriceFormula.UNIT_PLUS_EXTRA,
+                    taxMode      = TaxMode.PER_ITEM,
+                    hasSalePrice = true,
+                    hasBonus     = true,
+                    columnHint   = "الأعمدة: الاسم | الكمية | البونص | سعر الوحدة | إجمالي السطر | سعر البيع | الضريبة | إضافي"
+                ),
+                SupplierProfile(
+                    supplierCode = "38",
+                    priceFormula = PriceFormula.UNIT_PLUS_EXTRA,
+                    taxMode      = TaxMode.PER_INVOICE,
+                    hasSalePrice = true,
+                    hasBonus     = true,
+                    columnHint   = "الأعمدة: الاسم | الكمية | سعر الوحدة | إضافي | إجمالي السطر"
+                ),
+                SupplierProfile(
+                    supplierCode = "175",
+                    priceFormula = PriceFormula.UNIT_PRICE,
+                    taxMode      = TaxMode.PER_INVOICE,
+                    hasSalePrice = false,   // دريم: تجاهل سعر البيع
+                    hasBonus     = false,
+                    columnHint   = "الأعمدة: الاسم | الكمية | سعر الوحدة | الإجمالي"
+                ),
+                SupplierProfile(
+                    supplierCode = "198",
+                    priceFormula = PriceFormula.LINE_TOTAL_DIVIDED,
+                    taxMode      = TaxMode.PER_INVOICE,
+                    hasSalePrice = true,
+                    hasBonus     = true,
+                    columnHint   = "الأعمدة: الاسم | الكمية | البونص | إجمالي السطر | سعر البيع"
+                ),
+                SupplierProfile(
+                    supplierCode = "218",
+                    priceFormula = PriceFormula.UNIT_PRICE,
+                    taxMode      = TaxMode.PER_INVOICE,
+                    hasSalePrice = true,
+                    hasBonus     = true,
+                    columnHint   = "الأعمدة: الاسم | الكمية | سعر الوحدة | إجمالي السطر"
+                )
+            ))
         }
     }
 

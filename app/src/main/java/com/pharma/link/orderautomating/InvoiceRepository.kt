@@ -138,26 +138,30 @@ class InvoiceRepository(private val context: Context) {
                     val rawTax = obj.optDouble("tax", 0.0)
                     val extra = obj.optDouble("extra", 0.0)
                     
-                    var pPrice = 0.0
-                    var finalTax = rawTax
-                    var finalSalePrice = obj.optDouble("sale_p", 0.0)
+                    // جلب Profile المورد من الـ DB (أو الافتراضي لو مش موجود)
+                    val profile = AppDatabase.getDatabase(context)
+                        .supplierProfileDao()
+                        .getByCode(autoDetectedCode)
+                        ?: SupplierProfile(supplierCode = autoDetectedCode)
 
-                    // منطق الحساب بناءً على كود المورد المكتشف أو الاسم
-                    when {
-                        autoDetectedCode == "29" || normalizedRawName.contains("سينا") -> { // ابن سينا
-                            pPrice = unitP + extra
-                            if (qty > 0) finalTax = rawTax / qty
-                        }
-                        autoDetectedCode == "38" || normalizedRawName.contains("سيز") -> { // أوفر سيز
-                            pPrice = unitP + extra
-                        }
-                        autoDetectedCode == "175" || normalizedRawName.contains("دريم") -> { // دريم
-                            finalSalePrice = -1.0
-                            pPrice = unitP
-                        }
-                        lineTotal > 0 -> pPrice = lineTotal / qty
-                        else -> pPrice = unitP
+                    // حساب السعر حسب Profile المورد
+                    var pPrice = when (profile.priceFormula) {
+                        PriceFormula.UNIT_PLUS_EXTRA    -> unitP + extra
+                        PriceFormula.LINE_TOTAL_DIVIDED -> if (lineTotal > 0 && qty > 0) lineTotal / qty else unitP
+                        PriceFormula.UNIT_PRICE         -> if (lineTotal > 0 && qty > 0) lineTotal / qty else unitP
                     }
+
+                    // حساب الضريبة حسب Profile المورد
+                    var finalTax = when (profile.taxMode) {
+                        TaxMode.PER_ITEM    -> if (qty > 0) rawTax / qty else rawTax
+                        TaxMode.PER_INVOICE -> rawTax
+                    }
+
+                    // سعر البيع حسب Profile المورد
+                    var finalSalePrice = if (profile.hasSalePrice)
+                        obj.optDouble("sale_p", 0.0)
+                    else
+                        -1.0  // -1 = تجاهل (دريم وغيره)
 
                     val formattedPrice = (Math.round(pPrice * 1000).toDouble() / 1000.0)
                     val formattedTax = (Math.round(finalTax * 1000).toDouble() / 1000.0)
