@@ -18,21 +18,51 @@ data class OcrItem(
     val invoiceName: String,
     var quantity: Double,
     var bonus: Double = 0.0,
-    var taxes: Double=0.0,
-    var price: Double,       // هذا هو سعر الشراء (الصافي)
-    var salePrice: Double = 0.0, // سعر البيع (الجمهور)
-    var discount: Double = 0.0,
+    var unitPrice: Double = 0.0,          // سعر الوحدة كما هو مطبوع
+    var discountPercent: Double = 0.0,    // نسبة الخصم % كما هي مطبوعة
+    var lineTotalAsPrinted: Double = 0.0, // إجمالي السطر كما هو مطبوع
+    var taxes: Double = 0.0,
+    var price: Double = 0.0,              // سعر الشراء الصافي (محسوب في Kotlin)
+    var salePrice: Double = 0.0,
     var itmCode: String = "",
-    var matched: Boolean = false
+    var matched: Boolean = false,
+    var fuzzyScore: Double = 0.0          // 0 = no suggestion, 0.7-0.9 = suggestion
 )
 
 data class OcrResponse(
     val supplierName: String,
     val invoiceNumber: String,
+    val invoiceDate: String = "",
+    val invoiceTotalAsPrinted: Double = 0.0,  // إجمالي الفاتورة كما هو مطبوع
     val items: List<OcrItem>
 )
 
+sealed class ValidationResult {
+    object NoPrintedTotal : ValidationResult()
+    data class Match(val calculated: Double, val printed: Double) : ValidationResult()
+    data class SmallDiff(val calculated: Double, val printed: Double, val diff: Double) : ValidationResult()
+    data class BigDiff(val calculated: Double, val printed: Double, val diff: Double) : ValidationResult()
+}
+
 class InvoiceRepository(private val context: Context) {
+
+    fun validateInvoice(response: OcrResponse): ValidationResult {
+        val printedTotal = response.invoiceTotalAsPrinted
+        if (printedTotal <= 0.0) return ValidationResult.NoPrintedTotal
+
+        val calculatedTotal = response.items.sumOf { item ->
+            item.unitPrice * item.quantity * (1.0 - item.discountPercent / 100.0)
+        }
+
+        val difference = Math.abs(calculatedTotal - printedTotal)
+        val percentDiff = if (printedTotal > 0) (difference / printedTotal) * 100 else 0.0
+
+        return when {
+            percentDiff <= 1.0  -> ValidationResult.Match(calculatedTotal, printedTotal)
+            percentDiff <= 5.0  -> ValidationResult.SmallDiff(calculatedTotal, printedTotal, difference)
+            else                -> ValidationResult.BigDiff(calculatedTotal, printedTotal, difference)
+        }
+    }
 
     suspend fun analyzeImage(bitmap: Bitmap): OcrResponse? = withContext(Dispatchers.IO) {
         val base64 = bitmapToBase64(bitmap)
@@ -47,9 +77,20 @@ class InvoiceRepository(private val context: Context) {
     private suspend fun analyzeInvoice(base64Data: String, mimeType: String): OcrResponse? {
         val baseUrl = ServerManager.getSelectedUrl(context)
         try {
+            // جلب profile المورد المحدد حالياً (لو متاح)
+            val db = AppDatabase.getDatabase(context)
+            val selectedCode = ServerManager.getSelectedSupplierCode(context) ?: ""
+            val supplierProfile = if (selectedCode.isNotEmpty())
+                db.supplierProfileDao().getByCode(selectedCode)
+            else null
+
             val body = JSONObject().apply {
                 put("data", base64Data)
                 put("mime_type", mimeType)
+                if (supplierProfile?.columnHint?.isNotEmpty() == true) {
+                    put("supplier_code", selectedCode)
+                    put("column_hint", supplierProfile.columnHint)
+                }
             }.toString()
 
             val conn = URL("$baseUrl/gemini").openConnection() as HttpURLConnection
@@ -109,7 +150,6 @@ class InvoiceRepository(private val context: Context) {
             val rawSupName = root.optString("supplier_name", "غير معروف")
             
             // جلب الموردين من القاعدة للمقارنة الذكية
-            val db = AppDatabase.getDatabase(context)
             val supplierDao = db.supplierDictionaryDao()
             val allSuppliers = supplierDao.getAll()
             
@@ -131,56 +171,53 @@ class InvoiceRepository(private val context: Context) {
             val itemsArray = root.getJSONArray("items")
             val items = (0 until itemsArray.length()).map { i ->
                 itemsArray.getJSONObject(i).let { obj ->
-                    val qty = obj.optDouble("qty", 1.0).let { if (it <= 0) 1.0 else it }
-                    val bonus = obj.optDouble("bns", 0.0)
-                    val unitP = obj.optDouble("unit_p", 0.0)
-                    val lineTotal = obj.optDouble("line_total", 0.0)
-                    val rawTax = obj.optDouble("tax", 0.0)
-                    val extra = obj.optDouble("extra", 0.0)
-                    
+                    val qty      = obj.optDouble("quantity", 1.0).let { if (it <= 0) 1.0 else it }
+                    val bonus    = obj.optDouble("bonus", 0.0)
+                    val unitP    = obj.optDouble("unit_price", 0.0)
+                    val discPct  = obj.optDouble("discount_percent", 0.0)
+                    val lineTotal= obj.optDouble("line_total_as_printed", 0.0)
+
                     // جلب Profile المورد من الـ DB (أو الافتراضي لو مش موجود)
                     val profile = AppDatabase.getDatabase(context)
                         .supplierProfileDao()
                         .getByCode(autoDetectedCode)
                         ?: SupplierProfile(supplierCode = autoDetectedCode)
 
-                    // حساب السعر حسب Profile المورد
-                    var pPrice = when (profile.priceFormula) {
-                        PriceFormula.UNIT_PLUS_EXTRA    -> unitP + extra
+                    // حساب سعر الشراء الصافي في Kotlin (deterministic)
+                    val rawPrice = when (profile.priceFormula) {
+                        PriceFormula.UNIT_PLUS_EXTRA    -> unitP + (unitP * discPct / 100.0).let { unitP - it }
                         PriceFormula.LINE_TOTAL_DIVIDED -> if (lineTotal > 0 && qty > 0) lineTotal / qty else unitP
-                        PriceFormula.UNIT_PRICE         -> if (lineTotal > 0 && qty > 0) lineTotal / qty else unitP
+                        PriceFormula.UNIT_PRICE         -> unitP * (1 - discPct / 100.0)
                     }
 
-                    // حساب الضريبة حسب Profile المورد
-                    var finalTax = when (profile.taxMode) {
-                        TaxMode.PER_ITEM    -> if (qty > 0) rawTax / qty else rawTax
-                        TaxMode.PER_INVOICE -> rawTax
-                    }
+                    val pPrice = Math.round(rawPrice * 1000).toDouble() / 1000.0
 
                     // سعر البيع حسب Profile المورد
-                    var finalSalePrice = if (profile.hasSalePrice)
+                    val finalSalePrice = if (profile.hasSalePrice)
                         obj.optDouble("sale_p", 0.0)
                     else
                         -1.0  // -1 = تجاهل (دريم وغيره)
 
-                    val formattedPrice = (Math.round(pPrice * 1000).toDouble() / 1000.0)
-                    val formattedTax = (Math.round(finalTax * 1000).toDouble() / 1000.0)
-
                     OcrItem(
-                        invoiceName = obj.optString("name", "غير معروف"),
-                        quantity    = qty,
-                        bonus       = bonus,
-                        taxes       = formattedTax,
-                        price       = formattedPrice,
-                        salePrice   = finalSalePrice,
-                        matched     = false
+                        invoiceName        = obj.optString("name", "غير معروف"),
+                        quantity           = qty,
+                        bonus              = bonus,
+                        unitPrice          = unitP,
+                        discountPercent    = discPct,
+                        lineTotalAsPrinted = lineTotal,
+                        taxes              = 0.0,
+                        price              = pPrice,
+                        salePrice          = finalSalePrice,
+                        matched            = false
                     )
                 }
             }
             return OcrResponse(
-                supplierName = if (autoDetectedCode.isNotEmpty()) autoDetectedCode else rawSupName,
-                invoiceNumber = root.optString("invoice_number", ""),
-                items = items
+                supplierName           = if (autoDetectedCode.isNotEmpty()) autoDetectedCode else rawSupName,
+                invoiceNumber          = root.optString("invoice_number", ""),
+                invoiceDate            = root.optString("date", ""),
+                invoiceTotalAsPrinted  = root.optDouble("invoice_total_as_printed", 0.0),
+                items                  = items
             )
         } catch (e: Exception) {
             val msg = e.message ?: ""

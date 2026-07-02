@@ -28,7 +28,7 @@ import kotlinx.coroutines.*
 fun ReviewScreen(
     initialSupplierCode: String,
     initialInvoiceNumber: String,
-    items: List<OcrItem>,
+    response: OcrResponse?,
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
     viewModel: ReviewViewModel = viewModel()
@@ -41,6 +41,7 @@ fun ReviewScreen(
     val status by viewModel.status.collectAsState()
     val loading by viewModel.loading.collectAsState()
     val itemToRemapIndex by viewModel.itemToRemapIndex.collectAsState()
+    val validationWarning by viewModel.validationWarning.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -54,7 +55,7 @@ fun ReviewScreen(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.init(initialSupplierCode, initialInvoiceNumber, items)
+        viewModel.init(context, initialSupplierCode, initialInvoiceNumber, response)
     }
 
     if (itemToRemapIndex != -1) {
@@ -135,6 +136,30 @@ fun ReviewScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
+            if (validationWarning.isNotEmpty()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (validationWarning.startsWith("🔴"))
+                            MaterialTheme.colorScheme.errorContainer
+                        else
+                            MaterialTheme.colorScheme.secondaryContainer
+                    )
+                ) {
+                    Text(
+                        text = validationWarning,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (validationWarning.startsWith("🔴"))
+                            MaterialTheme.colorScheme.onErrorContainer
+                        else
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+
             if (status.isNotEmpty()) {
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),

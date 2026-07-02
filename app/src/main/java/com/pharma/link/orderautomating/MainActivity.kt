@@ -132,12 +132,12 @@ fun AppNavigation() {
             ) { backStackEntry ->
                 val supplierCode = backStackEntry.arguments?.getString("supplierCode") ?: ""
                 val invoiceNumber = backStackEntry.arguments?.getString("invoiceNumber") ?: ""
-                val ocrItems by sharedViewModel.ocrItems.collectAsState()
+                val ocrResponse by sharedViewModel.ocrResponse.collectAsState()
 
                 ReviewScreen(
                     initialSupplierCode = supplierCode,
                     initialInvoiceNumber = invoiceNumber,
-                    items = ocrItems,
+                    response = ocrResponse,
                     onBack = {
                         navController.popBackStack(Routes.INVOICE, inclusive = false)
                     },
@@ -185,7 +185,7 @@ fun InvoiceScreenWrapper(navController: NavController, sharedViewModel: SharedVi
                 
                 if (matchedCode.isNotBlank()) {
                     val invNum = result.invoiceNumber.ifBlank { "0" }.replace("/", "-")
-                    sharedViewModel.setOcrResult(matchedCode, invNum, result.items)
+                    sharedViewModel.setOcrResult(matchedCode, invNum, result)
                     try {
                         navController.navigate("mapping/$matchedCode/$invNum")
                     } catch (e: Exception) {
@@ -227,7 +227,7 @@ fun InvoiceScreenWrapper(navController: NavController, sharedViewModel: SharedVi
                         val invNum = currentResult.invoiceNumber.ifBlank { "0" }.replace("/", "-")
                         
                         pendingOcrResult = null
-                        sharedViewModel.setOcrResult(code, invNum, currentResult.items)
+                        sharedViewModel.setOcrResult(code, invNum, currentResult)
                         
                         // استخدام try-catch بسيط لحماية التنقل
                         try {

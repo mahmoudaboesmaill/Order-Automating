@@ -1,44 +1,30 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="130dp"
-    android:height="130dp"
-    android:viewportWidth="105"
-    android:viewportHeight="105">
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
 
-    <!-- ورقة الفاتورة المنحنية (مثل الصورة 1) -->
-    <path
-        android:fillColor="#F8FAFC"
-        android:strokeColor="#0F172A"
-        android:strokeWidth="2"
-        android:pathData="M35,25 L73,25 C73,25 78,25 78,30 L78,75 C78,80 73,80 73,80 L35,80 C35,80 30,80 30,75 L30,30 C30,25 35,25 35,25 Z"/>
+    <!-- ورقة الفاتورة -->
+    <path android:fillColor="#FFFFFF"
+          android:pathData="M28,20 L28,88 L80,88 L80,36 L64,20 Z"/>
+    <path android:fillColor="#99D6CF"
+          android:pathData="M64,20 L64,36 L80,36 Z"/>
 
-    <!-- رمز الصيدلية (الزائد) -->
-    <path
-        android:fillColor="#16A34A"
-        android:pathData="M50,35 L58,35 L58,43 L50,43 Z M54,32 L54,46 M47,39 L61,39"
-        android:strokeColor="#16A34A"
-        android:strokeWidth="3"
-        android:strokeLineCap="round"/>
+    <!-- سطور الفاتورة -->
+    <path android:strokeColor="#0F766E" android:strokeWidth="2.5"
+          android:strokeLineCap="round"
+          android:pathData="M36,48 L72,48"/>
+    <path android:strokeColor="#0F766E" android:strokeWidth="2.5"
+          android:strokeLineCap="round"
+          android:pathData="M36,58 L72,58"/>
+    <path android:strokeColor="#0F766E" android:strokeWidth="2.5"
+          android:strokeLineCap="round"
+          android:pathData="M36,68 L56,68"/>
 
-    <!-- سطور البيانات -->
-    <path
-        android:strokeColor="#94A3B8"
-        android:strokeWidth="2"
-        android:strokeLineCap="round"
-        android:pathData="M40,52 L68,52 M40,60 L68,60 M40,68 L55,68"/>
-
-    <!-- خط المسح الضوئي الأخضر المتوهج (مثل الصورة 1) -->
-    <path
-        android:strokeColor="#22C55E"
-        android:strokeWidth="4"
-        android:strokeLineCap="round"
-        android:pathData="M25,56 L83,56"/>
-
-    <!-- ظل خفيف تحت خط المسح -->
-    <path
-        android:strokeColor="#22C55E"
-        android:strokeWidth="8"
-        android:strokeAlpha="0.3"
-        android:strokeLineCap="round"
-        android:pathData="M25,56 L83,56"/>
-
+    <!-- علامة صح خضراء -->
+    <path android:strokeColor="#0F766E" android:strokeWidth="3.5"
+          android:fillColor="#00000000"
+          android:strokeLineCap="round"
+          android:strokeLineJoin="round"
+          android:pathData="M38,78 L48,88 L70,66"/>
 </vector>

@@ -79,6 +79,16 @@ object ServerManager {
         saveServers(context, servers)
     }
 
+    fun getSelectedSupplierCode(context: Context): String? {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString("selected_supplier_code", null)
+    }
+
+    fun saveSelectedSupplierCode(context: Context, code: String) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString("selected_supplier_code", code).apply()
+    }
+
     fun getSelectedUrl(context: Context): String =
         getSelectedServer(context)?.url ?: ""
 }

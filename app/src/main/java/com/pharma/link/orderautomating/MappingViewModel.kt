@@ -34,6 +34,15 @@ class MappingViewModel : ViewModel() {
             val sCode = supplierCode.trim().lowercase()
 
             val list = ocrItems.map { item ->
+                // أولاً: تحقق من OcrCorrectionCache
+                val cacheDao = db.ocrCorrectionCacheDao()
+                val rawText  = ArabicNormalizer.normalize(item.invoiceName)
+                val cached   = cacheDao.findCorrection(sCode, rawText)
+                if (cached != null) {
+                    cacheDao.incrementUsage(sCode, rawText)
+                    return@map item.copy(itmCode = cached.correctedItmCode, matched = true)
+                }
+
                 val mappingKey = ArabicNormalizer.normalize(item.invoiceName)
                 val learnedCode = mappingDao.getMappedCode(sCode, mappingKey)
                 if (learnedCode != null) {
@@ -45,7 +54,24 @@ class MappingViewModel : ViewModel() {
                     if (exactMatch != null) {
                         item.copy(itmCode = exactMatch.itmCode, matched = true)
                     } else {
-                        item
+                        // Fuzzy Matching
+                        val allItems = pharmacyDao.searchItems(
+                            ArabicNormalizer.normalize(item.invoiceName).take(4), 50
+                        )
+                        when (val fuzzy = FuzzyMatcher.findBestMatch(item.invoiceName, allItems)) {
+                            is FuzzyMatcher.MatchResult.AutoMatch ->
+                                item.copy(
+                                    itmCode = fuzzy.item.itmCode,
+                                    matched = true
+                                )
+                            is FuzzyMatcher.MatchResult.Suggestion ->
+                                item.copy(
+                                    itmCode = fuzzy.item.itmCode,
+                                    matched = false,  // محتاج تأكيد
+                                    fuzzyScore = fuzzy.score
+                                )
+                            else -> item
+                        }
                     }
                 }
             }
@@ -87,8 +113,18 @@ class MappingViewModel : ViewModel() {
             val mappingKey = ArabicNormalizer.normalize(currentItem.invoiceName)
             val sCode = supplierCode.trim().lowercase()
 
-            AppDatabase.getDatabase(context).smartMappingDao().insertMapping(
+            val db = AppDatabase.getDatabase(context)
+            db.smartMappingDao().insertMapping(
                 SmartMapping(sCode, mappingKey, pharmacyItem.itmCode)
+            )
+
+            db.ocrCorrectionCacheDao().insertOrReplace(
+                OcrCorrectionCache(
+                    supplierCode     = sCode,
+                    ocrRawText       = mappingKey,
+                    correctedItmCode = pharmacyItem.itmCode,
+                    correctedName    = pharmacyItem.nameAr
+                )
             )
 
             val newList = _mappedItems.value.toMutableList()

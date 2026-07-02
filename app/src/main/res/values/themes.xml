@@ -1,13 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.OrderAutomating" parent="android:Theme.Material.Light.NoActionBar" />
-
-    <style name="Theme.App.Splash" parent="Theme.SplashScreen">
-        <!-- استخدام لون الخلفية بدلاً من صورة ثقيلة في البداية لتقليل زمن التحميل -->
-        <item name="windowSplashScreenBackground">#E0F2F1</item>
-        <item name="windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+    <style name="Theme.OrderAutomating.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#0F766E</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="windowSplashScreenAnimationDuration">500</item>
         <item name="postSplashScreenTheme">@style/Theme.OrderAutomating</item>
-        <!-- إخفاء شريط الحالة لتقليل جهد الرسم الأولي -->
-        <item name="android:windowFullscreen">true</item>
     </style>
+    <style name="Theme.OrderAutomating" parent="Theme.AppCompat.Light.NoActionBar"/>
 </resources>

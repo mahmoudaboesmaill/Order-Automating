@@ -31,17 +31,34 @@ class ReviewViewModel : ViewModel() {
     private val _itemToRemapIndex = MutableStateFlow(-1)
     val itemToRemapIndex: StateFlow<Int> = _itemToRemapIndex.asStateFlow()
 
+    private val _validationWarning = MutableStateFlow<String>("")
+    val validationWarning: StateFlow<String> = _validationWarning.asStateFlow()
+
     private fun ensureRepository(context: Context) {
         if (!::repository.isInitialized) {
             repository = InvoiceRepository(context.applicationContext)
         }
     }
 
-    fun init(supplierCode: String, invoiceNumber: String, items: List<OcrItem>) {
-        if (_editableItems.value.isEmpty()) {
+    fun init(context: Context, supplierCode: String, invoiceNumber: String, response: OcrResponse?) {
+        if (_editableItems.value.isEmpty() && response != null) {
             _supplierCode.value = supplierCode
             _invoiceNumber.value = invoiceNumber
-            _editableItems.value = items
+            _editableItems.value = response.items
+
+            val repo = InvoiceRepository(context)
+            when (val v = repo.validateInvoice(response)) {
+                is ValidationResult.Match ->
+                    _validationWarning.value = ""
+                is ValidationResult.SmallDiff ->
+                    _validationWarning.value =
+                        "⚠️ فرق بسيط: محسوب ${String.format("%.2f", v.calculated)} / مطبوع ${String.format("%.2f", v.printed)}"
+                is ValidationResult.BigDiff ->
+                    _validationWarning.value =
+                        "🔴 فرق كبير! محسوب ${String.format("%.2f", v.calculated)} / مطبوع ${String.format("%.2f", v.printed)}\nتحقق من أسعار الفاتورة."
+                is ValidationResult.NoPrintedTotal ->
+                    _validationWarning.value = ""
+            }
         }
     }
 
@@ -110,10 +127,11 @@ class ReviewViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val invoiceItems = readyItems.map {
+                    val calculatedPrice = it.unitPrice * (1 - it.discountPercent / 100.0)
                     Item(
                         itmCode = it.itmCode,
                         quantity = it.quantity.toInt(),
-                        price = it.price,
+                        price = if (it.price != 0.0) it.price else calculatedPrice,
                         salePrice = it.salePrice,
                         taxes = it.taxes,
                         discount = 0.0,
@@ -122,8 +140,8 @@ class ReviewViewModel : ViewModel() {
                 }
                 val result = repository.sendInvoice(_supplierCode.value, _invoiceNumber.value, invoiceItems)
                 
-                // حفظ السجل بعد الإرسال
-                val totalPrice = invoiceItems.sumOf { it.price * it.quantity }
+                // حفظ السجل بعد الإرسال - استخدام المعادلة الـ deterministic للإجمالي
+                val totalPrice = readyItems.sumOf { it.unitPrice * it.quantity * (1 - it.discountPercent / 100.0) }
                 AppDatabase.getDatabase(context).invoiceRecordDao().insert(
                     InvoiceRecord(
                         supplierCode  = _supplierCode.value,

@@ -7,6 +7,9 @@ import kotlinx.coroutines.flow.asStateFlow
 
 class SharedViewModel : ViewModel() {
     
+    private val _ocrResponse = MutableStateFlow<OcrResponse?>(null)
+    val ocrResponse: StateFlow<OcrResponse?> = _ocrResponse.asStateFlow()
+
     private val _ocrItems = MutableStateFlow<List<OcrItem>>(emptyList())
     val ocrItems: StateFlow<List<OcrItem>> = _ocrItems.asStateFlow()
 
@@ -16,10 +19,11 @@ class SharedViewModel : ViewModel() {
     private val _invoiceNumber = MutableStateFlow("")
     val invoiceNumber: StateFlow<String> = _invoiceNumber.asStateFlow()
 
-    fun setOcrResult(supplierCode: String, invoiceNumber: String, items: List<OcrItem>) {
+    fun setOcrResult(supplierCode: String, invoiceNumber: String, response: OcrResponse) {
         _supplierCode.value = supplierCode
         _invoiceNumber.value = invoiceNumber
-        _ocrItems.value = items
+        _ocrResponse.value = response
+        _ocrItems.value = response.items
     }
 
     fun updateMappedItems(items: List<OcrItem>) {

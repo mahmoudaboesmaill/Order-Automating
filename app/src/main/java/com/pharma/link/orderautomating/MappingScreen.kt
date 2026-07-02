@@ -67,6 +67,16 @@ fun MappingScreen(
 
     val currentItem = mappedItems[currentIndex]
 
+    // حالة للاقتراح الذكي
+    var suggestedItem by remember(currentItem.itmCode) { mutableStateOf<PharmacyItem?>(null) }
+    LaunchedEffect(currentItem.itmCode, currentItem.fuzzyScore) {
+        if (currentItem.fuzzyScore in 0.70..0.89 && currentItem.itmCode.isNotEmpty()) {
+            suggestedItem = ItemsDatabase.getByCode(context, currentItem.itmCode)
+        } else {
+            suggestedItem = null
+        }
+    }
+
     Scaffold(
         topBar = {
             Column(modifier = Modifier.statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -150,7 +160,7 @@ fun MappingScreen(
                             containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                         )
                         InfoChip(
-                            text = "خصم: ${currentItem.discount}%",
+                            text = "خصم: ${currentItem.discountPercent}%",
                             icon = Icons.Default.Percent,
                             containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
                         )
@@ -159,6 +169,56 @@ fun MappingScreen(
             }
 
             Spacer(Modifier.height(20.dp))
+
+            // عرض الاقتراح الذكي (Fuzzy Match)
+            suggestedItem?.let { item ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.3f)),
+                    shape = MaterialTheme.shapes.large
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Lightbulb, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "اقتراح ذكي (${(currentItem.fuzzyScore * 100).toInt()}% تشابه):",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(item.nameEn, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("كود: ${item.itmCode}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                        
+                        Spacer(Modifier.height(12.dp))
+                        
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { viewModel.selectItem(context, supplierCode, item) },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                                shape = MaterialTheme.shapes.medium
+                            ) {
+                                Icon(Icons.Default.Check, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("قبول الاقتراح")
+                            }
+                            OutlinedButton(
+                                onClick = { 
+                                    // مسح الاقتراح للبحث اليدوي
+                                    suggestedItem = null 
+                                },
+                                modifier = Modifier.weight(0.6f),
+                                shape = MaterialTheme.shapes.medium
+                            ) {
+                                Text("بحث يدوي")
+                            }
+                        }
+                    }
+                }
+            }
 
             // شريط البحث "العائم"
             OutlinedTextField(

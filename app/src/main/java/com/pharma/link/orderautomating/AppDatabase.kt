@@ -9,8 +9,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 @Database(
     entities = [Item::class, PharmacyItem::class, SmartMapping::class, 
                 SupplierDictionary::class, InvoiceRecord::class, 
-                SupplierProfile::class], 
-    version = 16
+                SupplierProfile::class, OcrCorrectionCache::class], 
+    version = 17
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
@@ -20,6 +20,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun supplierDictionaryDao(): SupplierDictionaryDao
     abstract fun invoiceRecordDao(): InvoiceRecordDao
     abstract fun supplierProfileDao(): SupplierProfileDao
+    abstract fun ocrCorrectionCacheDao(): OcrCorrectionCacheDao
 
     companion object {
         private val MIGRATION_13_14 = object : Migration(13, 14) {
@@ -68,6 +69,22 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS ocr_correction_cache (
+                        supplierCode TEXT NOT NULL,
+                        ocrRawText TEXT NOT NULL,
+                        correctedItmCode TEXT NOT NULL,
+                        correctedName TEXT NOT NULL,
+                        usageCount INTEGER NOT NULL DEFAULT 1,
+                        lastUsed INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(supplierCode, ocrRawText)
+                    )
+                """)
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -78,7 +95,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "order_database"
                 )
-                .addMigrations(MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16)
+                .addMigrations(MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
                 .build()
                 INSTANCE = instance
                 instance
