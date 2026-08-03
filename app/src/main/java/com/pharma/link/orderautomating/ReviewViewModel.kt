@@ -102,7 +102,7 @@ class ReviewViewModel : ViewModel() {
                     SmartMapping(sCode, mappingKey, newItem.itmCode)
                 )
 
-                items[index] = currentItem.copy(itmCode = newItem.itmCode)
+                items[index] = currentItem.copy(itmCode = newItem.itmCode, matched = true)
                 _editableItems.value = items
                 _itemToRemapIndex.value = -1
             }

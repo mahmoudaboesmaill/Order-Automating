@@ -28,6 +28,8 @@ class SharedViewModel : ViewModel() {
 
     fun updateMappedItems(items: List<OcrItem>) {
         _ocrItems.value = items
+        // تحديث الـ ocrResponse أيضاً لضمان مزامنة البيانات عند الانتقال لشاشة المراجعة
+        _ocrResponse.value = _ocrResponse.value?.copy(items = items)
     }
 
     suspend fun findSupplierCodeByName(context: android.content.Context, name: String): String? {
