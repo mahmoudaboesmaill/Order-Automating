@@ -4,6 +4,9 @@ import androidx.room.*
 
 @Dao
 interface PharmacyItemDao {
+    @RawQuery
+    suspend fun searchRaw(query: androidx.sqlite.db.SupportSQLiteQuery): List<PharmacyItem>
+
     // البحث الشامل والذكي
     @Query("""
         SELECT * FROM pharmacy_items 

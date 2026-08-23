@@ -11,5 +11,10 @@ data class Item(
     val salePrice: Double,  // سعر البيع
     val taxes: Double = 0.0, // خانة الضريبة الجديدة
     val discount: Double = 0.0,
-    val bonus: Int = 0
+    val bonus: Int = 0,
+    // دريم: يحدّث التكلفة فقط ولا يلمس سعر البيع في E-PLUS.
+    val updateSalePrice: Boolean = true,
+    // يحدد الحقل الذي يدخل سجل التغييرات على الكمبيوتر.
+    val priceAlertKind: String = SupplierInvoiceRules.ALERT_SALE_PRICE,
+    val invoiceName: String = ""
 )

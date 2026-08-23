@@ -3,6 +3,10 @@ package com.pharma.link.orderautomating
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,49 +35,46 @@ class MappingViewModel : ViewModel() {
             val db = AppDatabase.getDatabase(context)
             val mappingDao = db.smartMappingDao()
             val pharmacyDao = db.pharmacyItemDao()
+            val cacheDao = db.ocrCorrectionCacheDao()
             val sCode = supplierCode.trim().lowercase()
 
-            val list = ocrItems.map { item ->
-                // أولاً: تحقق من OcrCorrectionCache
-                val cacheDao = db.ocrCorrectionCacheDao()
-                val rawText  = ArabicNormalizer.normalize(item.invoiceName)
-                val cached   = cacheDao.findCorrection(sCode, rawText)
-                if (cached != null) {
-                    cacheDao.incrementUsage(sCode, rawText)
-                    return@map item.copy(itmCode = cached.correctedItmCode, matched = true)
-                }
+            val list = coroutineScope {
+                ocrItems.map { item ->
+                    async(Dispatchers.IO) {
+                        // كل صف مستقل؛ تنفيذ البحث بالتوازي يقلل زمن ظهور شاشة المطابقة.
+                        val rawText = ArabicNormalizer.normalize(item.invoiceName)
+                        val cached = cacheDao.findCorrection(sCode, rawText)
+                        if (cached != null) {
+                            cacheDao.incrementUsage(sCode, rawText)
+                            return@async item.copy(itmCode = cached.correctedItmCode, matched = true)
+                        }
 
-                val mappingKey = ArabicNormalizer.normalize(item.invoiceName)
-                val learnedCode = mappingDao.getMappedCode(sCode, mappingKey)
-                if (learnedCode != null) {
-                    item.copy(itmCode = learnedCode, matched = true)
-                } else {
-                    val normalizedName = ArabicNormalizer.normalize(item.invoiceName)
-                    val exactMatch = pharmacyDao.getByName(normalizedName)
-                                  ?: pharmacyDao.getByName(item.invoiceName.trim())
-                    if (exactMatch != null) {
-                        item.copy(itmCode = exactMatch.itmCode, matched = true)
-                    } else {
-                        // Fuzzy Matching
-                        val allItems = pharmacyDao.searchItems(
-                            ArabicNormalizer.normalize(item.invoiceName).take(4), 50
-                        )
+                        val learnedCode = mappingDao.getMappedCode(sCode, rawText)
+                        if (learnedCode != null) {
+                            return@async item.copy(itmCode = learnedCode, matched = true)
+                        }
+
+                        val exactMatch = pharmacyDao.getByName(rawText)
+                            ?: pharmacyDao.getByName(item.invoiceName.trim())
+                        if (exactMatch != null) {
+                            return@async item.copy(itmCode = exactMatch.itmCode, matched = true)
+                        }
+
+                        val allItems = pharmacyDao.searchItems(rawText.take(4), 50)
                         when (val fuzzy = FuzzyMatcher.findBestMatch(item.invoiceName, allItems)) {
-                            is FuzzyMatcher.MatchResult.AutoMatch ->
-                                item.copy(
-                                    itmCode = fuzzy.item.itmCode,
-                                    matched = true
-                                )
-                            is FuzzyMatcher.MatchResult.Suggestion ->
-                                item.copy(
-                                    itmCode = fuzzy.item.itmCode,
-                                    matched = false,  // محتاج تأكيد
-                                    fuzzyScore = fuzzy.score
-                                )
+                            is FuzzyMatcher.MatchResult.AutoMatch -> item.copy(
+                                itmCode = fuzzy.item.itmCode,
+                                matched = true
+                            )
+                            is FuzzyMatcher.MatchResult.Suggestion -> item.copy(
+                                itmCode = fuzzy.item.itmCode,
+                                matched = false,
+                                fuzzyScore = fuzzy.score
+                            )
                             else -> item
                         }
                     }
-                }
+                }.awaitAll()
             }
             _mappedItems.value = list
             val firstUnmapped = list.indexOfFirst { !it.matched }
@@ -130,6 +131,7 @@ class MappingViewModel : ViewModel() {
             val newList = _mappedItems.value.toMutableList()
             newList[idx] = currentItem.copy(itmCode = pharmacyItem.itmCode, matched = true)
             _mappedItems.value = newList
+            skippedIndices.remove(idx)
             
             _searchQuery.value = ""
             _searchResults.value = emptyList()
@@ -150,17 +152,21 @@ class MappingViewModel : ViewModel() {
         val items = _mappedItems.value
         val idx = _currentIndex.value
         
-        // 1. ابحث عن أول صنف "أمامك" لم يتم مطابقتة ولم يتم تخطيه
-        var next = items.indices.firstOrNull { i -> i > idx && !items[i].matched && i !in skippedIndices }
+        // 1. ابحث عن أول صنف "أمامك" لم يتم مطابقته ولم يتم تخطيه
+        val next = items.indices.firstOrNull { i -> i > idx && !items[i].matched && i !in skippedIndices }
         
-        // 2. إذا وصلنا للنهاية، ابحث عن أي صنف غير مطابق (بما فيهم اللي اتعملهم تخطي)
-        if (next == null) {
-            next = items.indices.firstOrNull { i -> !items[i].matched }
-            // إذا وجدنا صنفاً كان متخطياً، نزيله من قائمة التخطي لأننا سنعالجه الآن
-            if (next != null) skippedIndices.remove(next)
+        if (next != null) {
+            _currentIndex.value = next
+        } else {
+            // 2. إذا لم نجد في الأمام، ابحث عن أي صنف سابق لم يتم مطابقته ولم يتم تخطيه
+            val wrapAround = items.indices.firstOrNull { i -> !items[i].matched && i !in skippedIndices }
+            if (wrapAround != null) {
+                _currentIndex.value = wrapAround
+            } else {
+                // 3. كل الأصناف إما تمت مطابقتها أو تم تخطيها صراحة -> انتقل للمراجعة
+                _currentIndex.value = items.size
+            }
         }
-        
-        _currentIndex.value = next ?: items.size
     }
 
     fun goBack(onCancel: () -> Unit) {

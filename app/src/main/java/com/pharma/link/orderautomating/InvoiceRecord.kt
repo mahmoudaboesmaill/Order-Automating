@@ -11,7 +11,17 @@ data class InvoiceRecord(
     val itemsCount: Int,
     val totalPrice: Double,
     val sentAt: Long = System.currentTimeMillis(),  // timestamp
-    val status: String = "success"                  // "success" / "failed"
+    val status: String = "success",                 // "success" / "failed"
+    // بيانات إضافية للمتابعة داخل سجل الفواتير. لها قيم افتراضية حتى تظل
+    // السجلات القديمة قابلة للقراءة بعد ترقية قاعدة البيانات.
+    val printedTotal: Double = 0.0,
+    val difference: Double = 0.0,
+    val matchStatus: String = "unknown",            // match / small_diff / big_diff / missing
+    val priceChangesCount: Int = 0,
+    val expiryPendingCount: Int = 0,
+    val ocrProvider: String = "auto",
+    val sourceType: String = "unknown",
+    val itemsJson: String = ""
 )
 
 @Dao

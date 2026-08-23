@@ -20,8 +20,17 @@ interface OcrCorrectionCacheDao {
               AND ocrRawText = :rawText LIMIT 1""")
     suspend fun findCorrection(supplierCode: String, rawText: String): OcrCorrectionCache?
 
+    @Query("SELECT * FROM ocr_correction_cache")
+    suspend fun getAll(): List<OcrCorrectionCache>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrReplace(cache: OcrCorrectionCache)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(caches: List<OcrCorrectionCache>)
+
+    @Query("DELETE FROM ocr_correction_cache")
+    suspend fun deleteAll()
 
     @Query("""UPDATE ocr_correction_cache
               SET usageCount = usageCount + 1, lastUsed = :now

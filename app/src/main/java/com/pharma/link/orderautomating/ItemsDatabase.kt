@@ -48,33 +48,51 @@ object ItemsDatabase {
 
     private suspend fun seedDefaultSuppliers(context: Context) {
         val dao = AppDatabase.getDatabase(context).supplierDictionaryDao()
-        if (dao.getAll().isEmpty()) {
-            val defaults = listOf(
-                SupplierDictionary(arabicName = "ابن سينا", englishName = "ibnsinapharma", supplierCode = "29"),
-                SupplierDictionary(arabicName = "ibn sina", englishName = "ibnsina", supplierCode = "29"),
-                SupplierDictionary(arabicName = "فارما أوفر سيز", englishName = "pharmaoverseas", supplierCode = "38"),
-                SupplierDictionary(arabicName = "pharma overseas", englishName = "pharmaoverseas", supplierCode = "38"),
-                SupplierDictionary(arabicName = "تبارك", englishName = "tabarak", supplierCode = "218"),
-                SupplierDictionary(arabicName = "مالتي ستورز", englishName = "multi stores", supplierCode = "218"),
-                SupplierDictionary(arabicName = "يونايتد جروب", englishName = "united group", supplierCode = "198"),
-                SupplierDictionary(arabicName = "دريم", englishName = "dream", supplierCode = "175"),
-                SupplierDictionary(arabicName = "دريم لمستحضرات التجميل", englishName = "dream cosmetics", supplierCode = "175")
-            )
-            defaults.forEach { dao.insert(it) }
-        }
+        val defaults = listOf(
+            SupplierDictionary(arabicName = "ابن سينا", englishName = "ibnsinapharma", supplierCode = "29"),
+            SupplierDictionary(arabicName = "ibn sina", englishName = "ibnsina", supplierCode = "29"),
+            SupplierDictionary(arabicName = "فارما أوفر سيز", englishName = "pharmaoverseas", supplierCode = "38"),
+            SupplierDictionary(arabicName = "pharma overseas", englishName = "pharmaoverseas", supplierCode = "38"),
+            SupplierDictionary(arabicName = "تبارك", englishName = "tabarak", supplierCode = "218"),
+            // OCR may return the brand name in several Arabic/English forms.
+            // Keep these aliases tied to the same E-PLUS supplier code.
+            SupplierDictionary(arabicName = "تبارك فارما", englishName = "tabark pharma", supplierCode = "218"),
+            SupplierDictionary(arabicName = "تبارك مالتي ستورز فارما", englishName = "tabark multistores pharma", supplierCode = "218"),
+            SupplierDictionary(arabicName = "tabark", englishName = "tabark", supplierCode = "218"),
+            SupplierDictionary(arabicName = "مالتي ستورز", englishName = "multi stores", supplierCode = "218"),
+            SupplierDictionary(arabicName = "يونايتد جروب", englishName = "united group", supplierCode = "198"),
+            SupplierDictionary(arabicName = "يونايتد جروب فارما", englishName = "united group pharm", supplierCode = "198"),
+            SupplierDictionary(arabicName = "يونايتد", englishName = "united", supplierCode = "198"),
+            SupplierDictionary(arabicName = "الجمهورية", englishName = "elgomhoria", supplierCode = "198"),
+            SupplierDictionary(arabicName = "دريم", englishName = "dream", supplierCode = "175"),
+            SupplierDictionary(arabicName = "دريم لمستحضرات التجميل", englishName = "dream cosmetics", supplierCode = "175")
+        )
+        // Older installations may already have some dictionary rows, so an
+        // `isEmpty()` guard would permanently miss newly added aliases such as
+        // United Group. Insert only missing exact aliases; Room replaces a row
+        // when the same generated id is supplied and otherwise keeps data safe.
+        val existing = dao.getAll()
+        defaults.filter { candidate ->
+            existing.none {
+                it.arabicName == candidate.arabicName &&
+                    it.englishName == candidate.englishName &&
+                    it.supplierCode == candidate.supplierCode
+            }
+        }.forEach { dao.insert(it) }
     }
 
     private suspend fun seedDefaultProfiles(context: Context) {
         val dao = AppDatabase.getDatabase(context).supplierProfileDao()
-        if (dao.getAll().isEmpty()) {
-            dao.insertAll(listOf(
+        // Profiles use supplierCode as their primary key, so upserting on every
+        // startup also repairs older databases that predate code 198/218.
+        dao.insertAll(listOf(
                 SupplierProfile(
                     supplierCode = "29",
                     priceFormula = PriceFormula.UNIT_PLUS_EXTRA,
                     taxMode      = TaxMode.PER_ITEM,
                     hasSalePrice = true,
                     hasBonus     = true,
-                    columnHint   = "الأعمدة: الاسم | الكمية | البونص | سعر الوحدة | إجمالي السطر | سعر البيع | الضريبة | إضافي"
+                    columnHint   = "ابن سينا: الاسم | الكمية فوق والبونص تحت | إجمالي الكمية | كود المورد | الصلاحية والتشغيلة | سعر الجمهور (سعر البيع) | سعر الصيدلي | خصم الصيدلي (لا يدخل الحساب) | هامش صيدلي وموزع (خذ رقم الصيدلي فقط) | ضريبة ق.م (إجمالي الصف) | الإجمالي بدون ضريبة"
                 ),
                 SupplierProfile(
                     supplierCode = "38",
@@ -82,7 +100,7 @@ object ItemsDatabase {
                     taxMode      = TaxMode.PER_INVOICE,
                     hasSalePrice = true,
                     hasBonus     = true,
-                    columnHint   = "الأعمدة: الاسم | الكمية | سعر الوحدة | إضافي | إجمالي السطر"
+                    columnHint   = "فارما أوفر سيز: الاسم | الشركة | الكمية + البونص | التشغيلة | الصلاحية | سعر الجمهور | ضريبة لكل علبة | الخصم (لا يدخل الحساب) | سعر الصيدلي | إجمالي القيمة | إجمالي ضريبة الصف | الهامش الثابت للصيدلي فقط"
                 ),
                 SupplierProfile(
                     supplierCode = "175",
@@ -90,26 +108,46 @@ object ItemsDatabase {
                     taxMode      = TaxMode.PER_INVOICE,
                     hasSalePrice = false,   // دريم: تجاهل سعر البيع
                     hasBonus     = false,
-                    columnHint   = "الأعمدة: الاسم | الكمية | سعر الوحدة | الإجمالي"
+                    columnHint   = "دريم: الاسم | الكمية | سعر البيع المطبوع = تكلفة الشراء | الإجمالي | سعر المستهلك (مرجع فقط ولا يغير سعر E-PLUS)"
                 ),
                 SupplierProfile(
                     supplierCode = "198",
                     priceFormula = PriceFormula.LINE_TOTAL_DIVIDED,
                     taxMode      = TaxMode.PER_INVOICE,
                     hasSalePrice = true,
-                    hasBonus     = true,
-                    columnHint   = "الأعمدة: الاسم | الكمية | البونص | إجمالي السطر | سعر البيع"
+                    hasBonus     = false,
+                    columnHint   = "يونايتد: لا يوجد بونص ولا هامش. المسلسل | الصلاحية والتشغيلة | الموقع | الاسم | الكمية | سعر الجمهور (سعر البيع) | الخصم | الإجمالي (إجمالي الشراء). سعر الشراء = الإجمالي ÷ الكمية ويُقارن بسعر الجمهور بعد الخصم."
                 ),
                 SupplierProfile(
                     supplierCode = "218",
                     priceFormula = PriceFormula.UNIT_PRICE,
                     taxMode      = TaxMode.PER_INVOICE,
                     hasSalePrice = true,
-                    hasBonus     = true,
-                    columnHint   = "الأعمدة: الاسم | الكمية | سعر الوحدة | إجمالي السطر"
+                    hasBonus     = false,
+                    columnHint   = "تبارك: لا يوجد بونص ولا هامش. اقرأ الجدول من اليمين لليسار: م/المسلسل (تجاهل) | وزن أو زون (تجاهل) | الشركة (تجاهل) | ك = كود الصنف (ليس سعراً إطلاقاً) | اسم الصنف | الكمية | الوحدة | الرصيد الحالي (تجاهل) | س. بيع = سعر البيع المطبوع | الخصم | الإجمالي/إجمالي التكلفة = إجمالي الشراء. سعر الشراء = الإجمالي ÷ الكمية ويُقارن بسعر البيع بعد الخصم."
                 )
             ))
+    }
+
+    suspend fun forceReload(context: Context): Int = withContext(Dispatchers.IO) {
+        _importProgress.value = 0f
+        importFromAssets(context)
+        _importProgress.value = 1f
+        AppDatabase.getDatabase(context).pharmacyItemDao().getCount()
+    }
+
+    suspend fun importFromUri(context: Context, uri: android.net.Uri): Int = withContext(Dispatchers.IO) {
+        _importProgress.value = 0f
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                importFromStream(context, input)
+            }
+        } catch (e: Exception) {
+            Log.e("ItemsDatabase", "Error importing from URI: ${e.message}")
+        } finally {
+            _importProgress.value = 1f
         }
+        AppDatabase.getDatabase(context).pharmacyItemDao().getCount()
     }
 
     private suspend fun importFromAssets(context: Context) {
@@ -127,26 +165,32 @@ object ItemsDatabase {
         val dao = AppDatabase.getDatabase(context).pharmacyItemDao()
         dao.deleteAll() 
 
-        val reader = inputStream.bufferedReader(Charset.forName("Windows-1256"))
-        
-        // تقدير عدد السطور (تقريبي للـ Progress)
-        val totalEstimatedLines = 37000 
-        
+        // قراءة الملف بترميز Windows-1256 مع دعم UTF-8
+        val bytes = inputStream.readBytes()
+        val text1256 = try { String(bytes, Charset.forName("Windows-1256")) } catch (e: Exception) { "" }
+        val textUtf8 = try { String(bytes, Charsets.UTF_8) } catch (e: Exception) { "" }
+
+        // تحديد الترميز الأنسب (لو العربي علامات استفهام في UTF-8 نستخدم 1256)
+        val textToUse = if (text1256.count { it in '\u0600'..'\u06FF' } >= textUtf8.count { it in '\u0600'..'\u06FF' }) {
+            text1256
+        } else {
+            textUtf8
+        }
+
+        val totalEstimatedLines = 75000
         val batch = mutableListOf<PharmacyItem>()
         var lineCount = 0
         
-        while (true) {
-            val line = reader.readLine() ?: break
-            if (lineCount > 0) { // Skip header
-                val item = parseLine(line)
-                if (item != null) batch.add(item)
+        textToUse.lineSequence().forEach { line ->
+            val item = parseLine(line)
+            if (item != null) {
+                batch.add(item)
             }
             lineCount++
 
             if (batch.size >= 1000) {
                 dao.insertAll(batch.toList())
                 batch.clear()
-                // تحديث الـ Progress كل 1000 صنف
                 _importProgress.value = (lineCount.toFloat() / totalEstimatedLines).coerceAtMost(0.99f)
             }
         }
@@ -167,51 +211,84 @@ object ItemsDatabase {
         val itmCode = parts[0]
         if (itmCode.isEmpty()) return null
 
+        // تجاهل سطر الهيدر لو موجود
+        val lowerCode = itmCode.lowercase()
+        if (lowerCode in listOf("code", "كود", "itmcode", "item_code", "id", "كود الصنف")) return null
+
         val nameAr = if (parts.size >= 2) parts[1] else ""
         val nameEn = if (parts.size >= 3) parts[2] else ""
         
-        // ذكاء اصطناعي: نبحث عن أي رقم طوله من 8 لـ 15 رقم في السطر كله ونعتبره باركود
+        // البحث عن الباركود
         val barcode = parts.find { p -> 
-            p.length in 8..15 && p.all { it.isDigit() } 
-        } ?: ""
+            p.length in 8..15 && p.all { it.isDigit() } && p != itmCode
+        } ?: parts.getOrNull(3)?.takeIf { it.all { c -> c.isDigit() } } ?: ""
 
         return PharmacyItem(itmCode = itmCode, nameAr = nameAr, nameEn = nameEn, barcode = barcode)
     }
 
     suspend fun search(context: Context, query: String, limit: Int = 100): List<PharmacyItem> {
-        val q = ArabicNormalizer.normalize(query)
-        if (q.length < 2) return emptyList()
-        
+        val trimmed = query.trim()
+        if (trimmed.length < 2) return emptyList()
+
         val dao = AppDatabase.getDatabase(context).pharmacyItemDao()
-        
-        // إذا كان باركود كامل (مثل 13 رقم)، نبحث عنه فوراً
-        if (q.length >= 10 && q.all { it.isDigit() }) {
-            return dao.searchItems(q, limit)
+
+        // 1. إذا كان باركود أو كود صنف صريح
+        if (trimmed.length >= 8 && trimmed.all { it.isDigit() }) {
+            val direct = dao.searchItems(trimmed, limit)
+            if (direct.isNotEmpty()) return direct
         }
 
-        // للأسماء: دعم الكلمات المتقطعة
-        val words = q.split(" ").filter { it.length >= 2 }
-        val searchPattern = if (words.size > 1) words.joinToString("%") { it } else q
-        
-        val results = dao.searchItems(searchPattern, limit).toMutableList()
+        // 2. تقسيم الكلمات والمقاطع بناءً على المسافات
+        val rawTokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (rawTokens.isEmpty()) return emptyList()
 
-        // بحث إضافي بالنص الأصلي لو النتائج قليلة
-        if (results.size < 5 && query.trim() != q) {
-            val fallback = dao.searchItems(query.trim(), limit)
-            fallback.forEach { item ->
-                if (results.none { it.itmCode == item.itmCode }) results.add(item)
-            }
+        // تجهيز الشروط لكل مقطع مع دعم علامة % كـ Wildcard
+        val tokenArgs = mutableListOf<Any>()
+        val whereClauses = mutableListOf<String>()
+
+        for (token in rawTokens) {
+            val normToken = ArabicNormalizer.normalize(token)
+            val pattern1 = if (normToken.contains("%")) "%$normToken%" else "%$normToken%"
+            val pattern2 = if (token.contains("%")) "%$token%" else "%$token%"
+
+            whereClauses.add("((nameEn LIKE ? OR nameAr LIKE ?) OR (nameEn LIKE ? OR nameAr LIKE ?))")
+            tokenArgs.add(pattern1)
+            tokenArgs.add(pattern1)
+            tokenArgs.add(pattern2)
+            tokenArgs.add(pattern2)
         }
 
-        // بحث عربي محسّن
-        if (q.any { it.code in 0x0600..0x06FF }) {
-            val arabicResults = dao.searchByNormalizedArabic(q, 50)
-            arabicResults.forEach { item ->
-                if (results.none { it.itmCode == item.itmCode }) results.add(item)
-            }
-        }
+        // بناء استعلام SQL مرن وسريع
+        val sql = StringBuilder()
+        sql.append("SELECT * FROM pharmacy_items WHERE (")
+        sql.append(whereClauses.joinToString(" AND "))
+        sql.append(") OR itmCode = ? OR barcode = ? ")
+        tokenArgs.add(trimmed)
+        tokenArgs.add(trimmed)
 
-        return results.take(limit)
+        val firstToken = rawTokens.first()
+        sql.append(" ORDER BY ")
+        sql.append(" CASE ")
+        sql.append(" WHEN itmCode = ? THEN 1 ")
+        sql.append(" WHEN barcode = ? THEN 2 ")
+        sql.append(" WHEN nameEn LIKE ? THEN 3 ")
+        sql.append(" WHEN nameAr LIKE ? THEN 4 ")
+        sql.append(" ELSE 5 ")
+        sql.append(" END ")
+        sql.append(" LIMIT ? ")
+
+        tokenArgs.add(trimmed)
+        tokenArgs.add(trimmed)
+        tokenArgs.add("$firstToken%")
+        tokenArgs.add("$firstToken%")
+        tokenArgs.add(limit)
+
+        return try {
+            val simpleQuery = androidx.sqlite.db.SimpleSQLiteQuery(sql.toString(), tokenArgs.toTypedArray())
+            dao.searchRaw(simpleQuery)
+        } catch (e: Exception) {
+            dao.searchItems(trimmed.replace(" ", "%"), limit)
+        }
     }
 
     suspend fun getByCode(context: Context, itmCode: String): PharmacyItem? =

@@ -19,8 +19,17 @@ interface SmartMappingDao {
     @Query("SELECT itmCode FROM smart_mapping WHERE supplierCode = :supplierCode AND invoiceName = :invoiceName LIMIT 1")
     suspend fun getMappedCode(supplierCode: String, invoiceName: String): String?
 
+    @Query("SELECT * FROM smart_mapping")
+    suspend fun getAll(): List<SmartMapping>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMapping(mapping: SmartMapping)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(mappings: List<SmartMapping>)
+
+    @Query("DELETE FROM smart_mapping")
+    suspend fun deleteAll()
 
     @Query("SELECT COUNT(*) FROM smart_mapping")
     suspend fun getCount(): Int
