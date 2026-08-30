@@ -53,28 +53,50 @@ class InvoiceOcrViewModel : ViewModel() {
     }
 
     fun onGalleryImageSelected(context: Context, bitmap: Bitmap) {
+        onGalleryImagesSelected(context, listOf(bitmap))
+    }
+
+    fun onGalleryImagesSelected(context: Context, bitmaps: List<Bitmap>) {
         ensureRepository(context)
         if (_processing.value) return
+        if (bitmaps.isEmpty()) {
+            _status.value = "❌ لم يتم اختيار أي صورة"
+            return
+        }
+        if (bitmaps.size > 4) {
+            _status.value = "❌ يمكن معالجة أربع صفحات كحد أقصى في المرة الواحدة"
+            bitmaps.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+            return
+        }
         _result.value = null
         viewModelScope.launch {
             acquireProcessingLock(context)
             _processing.value = true
-            _status.value = "جاري المعالجة..."
+            _status.value = if (bitmaps.size == 1) {
+                "جاري المعالجة..."
+            } else {
+                "جاري معالجة ${bitmaps.size} صفحات كفاتورة واحدة..."
+            }
             try {
-                val result = repository.analyzeImage(bitmap)
-                if (result != null) {
+                val result = repository.analyzeImages(bitmaps)
+                if (result != null && result.items.isNotEmpty()) {
                     _result.value = result
                     // لا نحتفظ برسالة "جاري المعالجة" أو بصورة الكاميرا بعد
                     // الانتقال للمراجعة؛ عند اختيار "فاتورة جديدة" تبدأ الشاشة
                     // بحالة نظيفة تماماً.
                     _status.value = ""
                 } else {
-                    _status.value = "❌ السيرفر لم يرجع بيانات"
+                    _status.value = if (result == null) {
+                        "❌ السيرفر لم يرجع بيانات"
+                    } else {
+                        "❌ تعذر استخراج جدول الأصناف حتى بعد محاولة القراءة المحسّنة."
+                    }
                 }
             } catch (e: Exception) {
                 _status.value = "❌ خطأ: ${e.message}"
                 Log.e("InvoiceOcrViewModel", "Gallery OCR Error", e)
             } finally {
+                bitmaps.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
                 _processing.value = false
                 releaseProcessingLock()
             }
@@ -92,12 +114,18 @@ class InvoiceOcrViewModel : ViewModel() {
             _status.value = "جاري تحليل البيانات بـ AI..."
             try {
                 val result = repository.analyzeImage(bitmap)
-                if (result != null) {
+                // Do not keep the original camera bitmap while mapping and
+                // review screens are being created.
+                _capturedBitmap.value = null
+                if (result != null && result.items.isNotEmpty()) {
                     _result.value = result
                     _status.value = ""
                 } else {
-                    _status.value = "❌ السيرفر لم يرجع بيانات"
-                    _capturedBitmap.value = null
+                    _status.value = if (result == null) {
+                        "❌ السيرفر لم يرجع بيانات"
+                    } else {
+                        "❌ تعذر استخراج جدول الأصناف حتى بعد محاولة القراءة المحسّنة."
+                    }
                 }
             } catch (e: Exception) {
                 _status.value = "❌ خطأ: ${e.message}"
@@ -158,7 +186,7 @@ class InvoiceOcrViewModel : ViewModel() {
             _status.value = "جاري تحليل الفاتورة ${candidate.invoiceNumber}..."
             try {
                 val result = repository.analyzePdf(bytes, candidate)
-                if (result != null) {
+                if (result != null && result.items.isNotEmpty()) {
                     val remaining = candidatesBeforeProcessing.filterNot { it == candidate }
                     _pdfCandidates.value = remaining
                     if (remaining.isEmpty()) pendingPdfBytes = null
@@ -167,7 +195,11 @@ class InvoiceOcrViewModel : ViewModel() {
                     _status.value = ""
                 } else {
                     _pdfCandidates.value = candidatesBeforeProcessing
-                    _status.value = "❌ السيرفر لم يرجع بيانات"
+                    _status.value = if (result == null) {
+                        "❌ السيرفر لم يرجع بيانات"
+                    } else {
+                        "❌ لم يتم استخراج أي صنف من الفاتورة المحددة."
+                    }
                 }
             } catch (e: Exception) {
                 _pdfCandidates.value = candidatesBeforeProcessing

@@ -36,7 +36,10 @@ private enum class HistoryFilter { ALL, TODAY, NEEDS_REVIEW }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HistoryScreen(onBack: () -> Unit) {
+fun HistoryScreen(
+    onBack: () -> Unit,
+    onCorrectMapping: (supplierCode: String, invoiceName: String) -> Unit = { _, _ -> }
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val dao = remember { AppDatabase.getDatabase(context).invoiceRecordDao() }
@@ -90,7 +93,16 @@ fun HistoryScreen(onBack: () -> Unit) {
         )
     }
 
-    selectedRecord?.let { record -> HistoryDetailsDialog(record, onDismiss = { selectedRecord = null }) }
+    selectedRecord?.let { record ->
+        HistoryDetailsDialog(
+            record = record,
+            onDismiss = { selectedRecord = null },
+            onCorrectMapping = { invoiceName ->
+                selectedRecord = null
+                onCorrectMapping(record.supplierCode, invoiceName)
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -314,7 +326,11 @@ private fun matchStatusInfo(record: InvoiceRecord): StatusInfo {
 }
 
 @Composable
-private fun HistoryDetailsDialog(record: InvoiceRecord, onDismiss: () -> Unit) {
+private fun HistoryDetailsDialog(
+    record: InvoiceRecord,
+    onDismiss: () -> Unit,
+    onCorrectMapping: (invoiceName: String) -> Unit
+) {
     val items = remember(record.itemsJson) { parseHistoryItems(record.itemsJson) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -334,7 +350,11 @@ private fun HistoryDetailsDialog(record: InvoiceRecord, onDismiss: () -> Unit) {
                 Text("المعالج: ${providerLabel(record.ocrProvider)}  •  المصدر: ${sourceLabel(record.sourceType)}", style = MaterialTheme.typography.labelMedium)
                 if (items.isNotEmpty()) {
                     Text("الأصناف (${items.size})", fontWeight = FontWeight.Bold)
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) { items(items) { item -> HistoryDetailItem(item) } }
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        items(items) { item ->
+                            HistoryDetailItem(item, onCorrectMapping)
+                        }
+                    }
                 } else {
                     Text("تفاصيل الأصناف غير متاحة للسجلات القديمة.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -347,10 +367,18 @@ private fun HistoryDetailsDialog(record: InvoiceRecord, onDismiss: () -> Unit) {
 private data class HistoryItemDetail(val name: String, val code: String, val quantity: Double, val bonus: Double, val purchase: Double, val sale: Double, val expiry: String)
 
 @Composable
-private fun HistoryDetailItem(item: HistoryItemDetail) {
+private fun HistoryDetailItem(
+    item: HistoryItemDetail,
+    onCorrectMapping: (invoiceName: String) -> Unit
+) {
     Surface(shape = PharmaShapes.medium, color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)) {
         Column(Modifier.padding(8.dp)) {
-            Text(item.name, fontWeight = FontWeight.SemiBold, maxLines = 2)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(item.name, fontWeight = FontWeight.SemiBold, maxLines = 2, modifier = Modifier.weight(1f))
+                IconButton(onClick = { onCorrectMapping(item.name) }) {
+                    Icon(Icons.Default.Edit, contentDescription = "تصحيح مطابقة هذا الصنف")
+                }
+            }
             Text("كود: ${item.code.ifBlank { "—" }} • كمية: ${number(item.quantity)} • بونص: ${number(item.bonus)}", style = MaterialTheme.typography.labelSmall)
             Text("شراء: ${money(item.purchase)} • بيع: ${money(item.sale)} • صلاحية: ${item.expiry.ifBlank { "لم تُدخل" }}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -393,5 +421,5 @@ private fun todayFileName(): String = SimpleDateFormat("yyyyMMdd", Locale.US).fo
 private fun money(value: Double): String = String.format(Locale.US, "%.2f ج.م", value)
 private fun number(value: Double): String = if (value % 1.0 == 0.0) value.toInt().toString() else String.format(Locale.US, "%.2f", value)
 private fun providerLabel(value: String): String = when (value.lowercase(Locale.US)) { "gemini" -> "Gemini"; "mistral" -> "Mistral"; else -> "تلقائي" }
-private fun sourceLabel(value: String): String = when (value.lowercase(Locale.US)) { "image" -> "صورة"; "pdf" -> "PDF"; else -> "غير محدد" }
+private fun sourceLabel(value: String): String = when (value.lowercase(Locale.US)) { "image" -> "صورة"; "multi_image" -> "صور متعددة"; "pdf" -> "PDF"; else -> "غير محدد" }
 private fun matchStatusLabel(matchStatus: String, status: String): String = when { status != "success" -> "فشل الإرسال"; matchStatus == "match" -> "مطابق"; matchStatus == "small_diff" -> "فرق بسيط"; matchStatus == "big_diff" -> "فرق كبير"; else -> "بدون إجمالي مطبوع" }

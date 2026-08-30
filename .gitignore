@@ -1,17 +1,61 @@
+# Android Studio / Gradle local state
+.idea/
 *.iml
-.gradle
-/app/src/main/res/drawable/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+.gradle/
+.gradle-home/
+.kotlin/
+**/build/
+/captures/
+.externalNativeBuild/
+.cxx/
 local.properties
+
+# Android build artifacts
+*.apk
+*.aab
+
+# Python caches and local environments
 __pycache__/
-*.pyc
+*.py[cod]
+.venv/
+venv/
+
+# Local secrets. Keep only safe examples in Git.
+.env
+.env.*
+!.env.example
+server.env
+server.env.*
+!server.env.example
+
+# Order Automating runtime output
+server-runtime-*.log
+last_seen_prices.json
+final_invoice_header.tsv
+final_invoice_items.tsv
+final_invoice.json
+send_session.json
+robot_control.ini
+robot_checkpoint.state
+price_alerts.txt
+
+# Extractor generated artifacts; keep source/spec files.
+EPlus_Extractor/build/
+EPlus_Extractor/dist/
+EPlus_Extractor_Win7/bin/
+EPlus_Extractor_Win7/obj/
+EPlus_Extractor_Win7/dist/
+
+# Local tools and transferred attachments
+.agents/
+.codex-remote-attachments/
+
+# Local installers, screenshots, and old backups
+/python38*.exe
+/python38*.zip
+/orderautomating_screen*.png
+*_old_backup.*
+
+# OS noise
+.DS_Store
+Thumbs.db

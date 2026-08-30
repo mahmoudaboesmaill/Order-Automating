@@ -259,12 +259,28 @@ fun InvoiceOcrScreen(
     }
 
     val galleryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let {
-            val bitmap = uriToBitmap(context, it)
-            if (bitmap != null) {
-                viewModel.onGalleryImageSelected(context, bitmap)
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        when {
+            uris.isEmpty() -> Unit
+            uris.size > 4 -> {
+                sharedFileError = "يمكن اختيار أربع صفحات كحد أقصى للفاتورة الواحدة."
+            }
+            else -> {
+                scope.launch(Dispatchers.IO) {
+                    val bitmaps = uris.mapNotNull { uriToBitmap(context, it) }
+                    withContext(Dispatchers.Main) {
+                        if (bitmaps.size != uris.size) {
+                            bitmaps.forEach { bitmap ->
+                                if (!bitmap.isRecycled) bitmap.recycle()
+                            }
+                            sharedFileError = "تعذر قراءة إحدى الصفحات. أعد اختيار صور الفاتورة."
+                        } else {
+                            sharedFileError = ""
+                            viewModel.onGalleryImagesSelected(context, bitmaps)
+                        }
+                    }
+                }
             }
         }
     }
@@ -590,8 +606,8 @@ fun InvoiceOcrScreen(
 
                     // Action 3: Gallery Image (Tertiary)
                     PharmaActionCard(
-                        title = "اختيار صورة من المعرض",
-                        subtitle = "تحليل صور الفواتير المحفوظة في الهاتف",
+                        title = "اختيار صورة أو عدة صفحات",
+                        subtitle = "اختر صفحات الفاتورة معًا وبالترتيب من المعرض",
                         icon = Icons.Default.Collections,
                         color = MaterialTheme.colorScheme.tertiary,
                         isHero = false,
@@ -1136,8 +1152,19 @@ private fun uriToBitmap(context: android.content.Context, uri: Uri): Bitmap? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             ImageDecoder.decodeBitmap(
                 ImageDecoder.createSource(context.contentResolver, uri)
-            ) { decoder, _, _ ->
+            ) { decoder, info, _ ->
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                val scale = minOf(
+                    2400f / info.size.width,
+                    3600f / info.size.height,
+                    1f
+                )
+                if (scale < 1f) {
+                    decoder.setTargetSize(
+                        (info.size.width * scale).toInt(),
+                        (info.size.height * scale).toInt()
+                    )
+                }
             }
         } else {
             @Suppress("DEPRECATION")

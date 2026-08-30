@@ -1,0 +1,79 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+
+    <!-- Soft Glow Background Circle -->
+    <path
+        android:fillColor="#1514B8A6"
+        android:pathData="M60,8 C88.7,8 112,31.3 112,60 C112,88.7 88.7,112 60,112 C31.3,112 8,88.7 8,60 C8,31.3 31.3,8 60,8 Z" />
+
+    <!-- Receipt / Invoice Card Body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M38,24 C38,21.8 39.8,20 42,20 L72,20 L86,34 L86,94 C86,96.2 84.2,98 82,98 L42,98 C39.8,98 38,96.2 38,94 Z" />
+
+    <!-- Document Fold -->
+    <path
+        android:fillColor="#0D9488"
+        android:pathData="M72,20 L72,34 L86,34 Z" />
+
+    <!-- Cross Watermark Header -->
+    <path
+        android:fillColor="#1A0D9488"
+        android:pathData="M52,30 L56,30 L56,26 L60,26 L60,30 L64,30 L64,34 L60,34 L60,38 L56,38 L56,34 L52,34 Z" />
+
+    <!-- OCR Document Flow Lines -->
+    <path
+        android:strokeColor="#CBD5E1"
+        android:strokeWidth="2.8"
+        android:strokeLineCap="round"
+        android:pathData="M48,46 L76,46" />
+
+    <path
+        android:strokeColor="#CBD5E1"
+        android:strokeWidth="2.8"
+        android:strokeLineCap="round"
+        android:pathData="M48,56 L70,56" />
+
+    <path
+        android:strokeColor="#CBD5E1"
+        android:strokeWidth="2.8"
+        android:strokeLineCap="round"
+        android:pathData="M48,66 L62,66" />
+
+    <!-- Circular Verified Node -->
+    <path
+        android:fillColor="#0F766E"
+        android:pathData="M72,72 C72,64.8 77.8,59 85,59 C92.2,59 98,64.8 98,72 C98,79.2 92.2,85 85,85 C77.8,85 72,79.2 72,72 Z" />
+
+    <path
+        android:fillColor="#2DD4BF"
+        android:pathData="M75,72 C75,66.5 79.5,62 85,62 C90.5,62 95,66.5 95,72 C95,77.5 90.5,82 85,82 C79.5,82 75,77.5 75,72 Z" />
+
+    <!-- Check Icon -->
+    <path
+        android:strokeColor="#042F2E"
+        android:strokeWidth="2.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M80,72 L83.5,75.5 L90,68.5" />
+
+    <!-- Digital Barcode Accents -->
+    <path
+        android:strokeColor="#0D9488"
+        android:strokeWidth="3.0"
+        android:strokeLineCap="round"
+        android:pathData="M48,84 L53,84" />
+    <path
+        android:strokeColor="#0D9488"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:pathData="M57,84 L59,84" />
+    <path
+        android:strokeColor="#0D9488"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M63,84 L68,84" />
+</vector>

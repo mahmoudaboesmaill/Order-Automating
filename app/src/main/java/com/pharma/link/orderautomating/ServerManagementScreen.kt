@@ -22,7 +22,10 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ServerManagementScreen(onBack: () -> Unit) {
+fun ServerManagementScreen(
+    onBack: () -> Unit,
+    onOpenMappingLearning: () -> Unit = {}
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var servers by remember { mutableStateOf(ServerManager.getServers(context)) }
@@ -282,6 +285,36 @@ fun ServerManagementScreen(onBack: () -> Unit) {
                                 Text("استيراد CSV")
                             }
                         }
+                    }
+                }
+            }
+
+            item {
+                Text(
+                    text = "التعلم والمطابقات",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(8.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenMappingLearning),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.School, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("مركز التعلم والمطابقات", fontWeight = FontWeight.Bold)
+                            Text(
+                                "عدّل أو انسَ مطابقة، ودرّب التطبيق من فواتير قديمة بدون إرسالها.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        Icon(Icons.Default.ChevronLeft, contentDescription = null)
                     }
                 }
             }

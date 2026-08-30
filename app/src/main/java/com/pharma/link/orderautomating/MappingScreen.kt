@@ -51,6 +51,40 @@ fun MappingScreen(
     var showAddItemDialog by remember { mutableStateOf(false) }
     var itemToEditBarcode by remember { mutableStateOf<PharmacyItem?>(null) }
 
+    if (ocrItems.isEmpty()) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    Icons.Default.ErrorOutline,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "لم يصل أي صنف إلى شاشة المطابقة",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "أعد تصوير الفاتورة الطويلة بوضوح، أو قسّمها إلى صورتين.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = onBack) { Text("الرجوع وإعادة المحاولة") }
+            }
+        }
+        return
+    }
+
     LaunchedEffect(Unit) {
         viewModel.loadMappings(context, supplierCode, ocrItems)
     }

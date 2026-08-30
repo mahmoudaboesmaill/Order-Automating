@@ -8,6 +8,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -17,6 +19,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -113,6 +118,12 @@ object Routes {
     const val REVIEW = "review/{supplierCode}/{invoiceNumber}"
     const val SERVER_SETTINGS = "server_settings/{fromReview}"
     const val HISTORY = "history"
+    const val MAPPING_LEARNING = "mapping_learning?supplierCode={supplierCode}&invoiceName={invoiceName}"
+
+    fun mappingLearning(supplierCode: String = "", invoiceName: String = ""): String {
+        if (supplierCode.isBlank() && invoiceName.isBlank()) return "mapping_learning"
+        return "mapping_learning?supplierCode=${Uri.encode(supplierCode)}&invoiceName=${Uri.encode(invoiceName)}"
+    }
 }
 
 @Composable
@@ -124,6 +135,7 @@ fun AppNavigation(
     val navController = rememberNavController()
     val sharedViewModel: SharedViewModel = viewModel()
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
+    val focusManager = LocalFocusManager.current
     
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
@@ -140,7 +152,23 @@ fun AppNavigation(
     }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-        NavHost(navController = navController, startDestination = Routes.INVOICE) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(focusManager) {
+                    awaitEachGesture {
+                        // Clear before child controls handle the press. A tapped
+                        // text field immediately takes focus again; every other
+                        // target leaves focus cleared and closes the keyboard.
+                        awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = PointerEventPass.Initial
+                        )
+                        focusManager.clearFocus(force = true)
+                    }
+                }
+        ) {
+            NavHost(navController = navController, startDestination = Routes.INVOICE) {
             composable(Routes.INVOICE) {
                 InvoiceScreenWrapper(
                     navController = navController,
@@ -205,13 +233,42 @@ fun AppNavigation(
                 arguments = listOf(navArgument("fromReview") { type = NavType.BoolType })
             ) {
                 ServerManagementScreen(
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStack() },
+                    onOpenMappingLearning = {
+                        navController.navigate(Routes.mappingLearning()) { launchSingleTop = true }
+                    }
                 )
             }
 
             composable(Routes.HISTORY) {
-                HistoryScreen(onBack = { navController.popBackStack() })
+                HistoryScreen(
+                    onBack = { navController.popBackStack() },
+                    onCorrectMapping = { supplierCode, invoiceName ->
+                        navController.navigate(Routes.mappingLearning(supplierCode, invoiceName))
+                    }
+                )
             }
+
+            composable(
+                route = Routes.MAPPING_LEARNING,
+                arguments = listOf(
+                    navArgument("supplierCode") {
+                        type = NavType.StringType
+                        defaultValue = ""
+                    },
+                    navArgument("invoiceName") {
+                        type = NavType.StringType
+                        defaultValue = ""
+                    }
+                )
+            ) { backStackEntry ->
+                MappingLearningScreen(
+                    initialSupplierCode = backStackEntry.arguments?.getString("supplierCode").orEmpty(),
+                    initialInvoiceName = backStackEntry.arguments?.getString("invoiceName").orEmpty(),
+                    onBack = { navController.popBackStack() }
+                )
+            }
+        }
         }
     }
 }

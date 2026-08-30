@@ -59,6 +59,30 @@ data class InvoiceSendLine(
     val expiryYear: String = ""
 )
 
+data class SendSessionState(
+    val exists: Boolean = false,
+    val jobId: String = "",
+    val supplierCode: String = "",
+    val invoiceNumber: String = "",
+    val status: String = "none",
+    val phase: String = "",
+    val headerEntered: Boolean = false,
+    val completedItems: Int = 0,
+    val totalItems: Int = 0,
+    val currentIndex: Int = -1,
+    val processAlive: Boolean = false,
+    val canResume: Boolean = false,
+    val requiresResolution: Boolean = false,
+    val requiresRestart: Boolean = false,
+    val message: String = "",
+    val error: String = ""
+) {
+    val isIncomplete: Boolean
+        get() = exists && status in setOf(
+            "launching", "running", "paused", "interrupted", "cancelling"
+        )
+}
+
 data class PdfInvoiceCandidate(
     val invoiceNumber: String,
     val pageStart: Int,
@@ -154,9 +178,18 @@ class InvoiceRepository(private val context: Context) {
         }
     }
 
-    suspend fun analyzeImage(bitmap: Bitmap): OcrResponse? = withContext(Dispatchers.IO) {
-        val base64 = bitmapToBase64(bitmap)
-        analyzeInvoice(base64, "image/jpeg", sourceType = "image")
+    suspend fun analyzeImage(bitmap: Bitmap): OcrResponse? = analyzeImages(listOf(bitmap))
+
+    suspend fun analyzeImages(bitmaps: List<Bitmap>): OcrResponse? = withContext(Dispatchers.IO) {
+        require(bitmaps.isNotEmpty()) { "اختر صورة واحدة على الأقل للفاتورة" }
+        require(bitmaps.size <= 4) { "يمكن معالجة أربع صفحات كحد أقصى في المرة الواحدة" }
+        val encodedPages = bitmaps.map(::bitmapToBase64)
+        analyzeInvoice(
+            base64Data = encodedPages.first(),
+            mimeType = "image/jpeg",
+            sourceType = if (encodedPages.size > 1) "multi_image" else "image",
+            additionalBase64Images = encodedPages.drop(1)
+        )
     }
 
     suspend fun inspectPdf(bytes: ByteArray): List<PdfInvoiceCandidate> = withContext(Dispatchers.IO) {
@@ -206,11 +239,45 @@ class InvoiceRepository(private val context: Context) {
         analyzeInvoice(base64, "application/pdf", candidate, sourceType = "pdf")
     }
 
+    /** Reads product names only for the offline learning screen; it never calls /invoice. */
+    suspend fun extractTrainingItemNames(
+        bytes: ByteArray,
+        mimeType: String,
+        supplierCode: String
+    ): List<String> = withContext(Dispatchers.IO) {
+        val baseUrl = ServerManager.getSelectedUrl(context)
+        if (baseUrl.isBlank()) {
+            throw Exception("لم يتم إعداد سيرفر المعالجة. أضف عنوان السيرفر من الإعدادات أولاً.")
+        }
+        val safeMimeType = mimeType.takeIf {
+            it in setOf("image/jpeg", "image/png", "application/pdf")
+        } ?: if (bytes.size >= 4 && String(bytes, 0, 4, Charsets.US_ASCII) == "%PDF") {
+            "application/pdf"
+        } else {
+            "image/jpeg"
+        }
+        val body = JSONObject().apply {
+            put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
+            put("mime_type", safeMimeType)
+            put("supplier_code", supplierCode.trim())
+            put("ocr_provider", ServerManager.getOcrProvider(context))
+        }.toString()
+        val root = JSONObject(postJson(baseUrl, "/training-ocr", body))
+        val names = root.optJSONArray("item_names")
+            ?: throw Exception("السيرفر لم يرجع أسماء أصناف للتدريب")
+        deduplicateTrainingNames(
+            (0 until names.length()).mapNotNull { index ->
+                names.optString(index).trim().takeIf(String::isNotBlank)
+            }
+        )
+    }
+
     private suspend fun analyzeInvoice(
         base64Data: String,
         mimeType: String,
         pdfCandidate: PdfInvoiceCandidate? = null,
-        sourceType: String = "unknown"
+        sourceType: String = "unknown",
+        additionalBase64Images: List<String> = emptyList()
     ): OcrResponse? {
         val baseUrl = ServerManager.getSelectedUrl(context)
         if (baseUrl.isBlank()) {
@@ -228,6 +295,9 @@ class InvoiceRepository(private val context: Context) {
                 put("data", base64Data)
                 put("mime_type", mimeType)
                 put("ocr_provider", ServerManager.getOcrProvider(context))
+                if (additionalBase64Images.isNotEmpty()) {
+                    put("additional_images", JSONArray(additionalBase64Images))
+                }
                 if (selectedCode.isNotBlank()) {
                     put("supplier_code", selectedCode)
                 }
@@ -527,7 +597,12 @@ class InvoiceRepository(private val context: Context) {
             }
             doOutput = true
             connectTimeout = 60000
-            readTimeout = 60000
+            // OCR providers can legitimately take longer than one minute for
+            // large or photographed invoices. The server itself allows a
+            // single Mistral request up to 75 seconds and automatic fallback
+            // may need additional time, so keep the Android client waiting
+            // long enough to receive the real server response.
+            readTimeout = 180000
             OutputStreamWriter(outputStream).use { it.write(body) }
         }
 
@@ -537,6 +612,99 @@ class InvoiceRepository(private val context: Context) {
         } else {
             val errBody = conn.errorStream?.bufferedReader()?.readText() ?: "no error body"
             throw Exception("HTTP $responseCode: $errBody")
+        }
+    }
+
+    private fun parseSendSession(body: String): SendSessionState {
+        val root = JSONObject(body.ifBlank { "{}" })
+        val source = root.optJSONObject("session") ?: root
+        return SendSessionState(
+            exists = source.optBoolean("exists", false),
+            jobId = source.optString("job_id", ""),
+            supplierCode = source.optString("supplier_code", ""),
+            invoiceNumber = source.optString("invoice_number", ""),
+            status = source.optString("status", "none"),
+            phase = source.optString("phase", ""),
+            headerEntered = source.optBoolean("header_entered", false),
+            completedItems = source.optInt("completed_items", 0),
+            totalItems = source.optInt("total_items", 0),
+            currentIndex = source.optInt("current_index", -1),
+            processAlive = source.optBoolean("process_alive", false),
+            canResume = source.optBoolean("can_resume", false),
+            requiresResolution = source.optBoolean("requires_resolution", false),
+            requiresRestart = source.optBoolean("requires_restart", false),
+            message = root.optString("message").ifBlank { source.optString("message", "") },
+            error = root.optString("error", "")
+        )
+    }
+
+    private fun requestSendSession(
+        method: String,
+        path: String,
+        body: JSONObject? = null
+    ): SendSessionState {
+        val baseUrl = ServerManager.getSelectedUrl(context)
+        if (baseUrl.isBlank()) {
+            return SendSessionState(error = "لم يتم إعداد سيرفر المعالجة.")
+        }
+        val conn = URL("$baseUrl$path").openConnection() as HttpURLConnection
+        conn.requestMethod = method
+        conn.setRequestProperty("Content-Type", "application/json")
+        ServerManager.getSelectedToken(context).takeIf { it.isNotBlank() }?.let {
+            conn.setRequestProperty("X-Order-Robot-Token", it)
+        }
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+        if (body != null) {
+            conn.doOutput = true
+            OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
+        }
+        val responseCode = conn.responseCode
+        val responseBody = if (responseCode in 200..299) {
+            conn.inputStream.bufferedReader().use { it.readText() }
+        } else {
+            conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        }
+        return if (responseBody.isNotBlank()) {
+            parseSendSession(responseBody)
+        } else {
+            SendSessionState(error = "تعذر قراءة حالة جلسة الإرسال (HTTP $responseCode).")
+        }
+    }
+
+    suspend fun getSendSession(): SendSessionState = withContext(Dispatchers.IO) {
+        try {
+            requestSendSession("GET", "/invoice/session")
+        } catch (error: Exception) {
+            SendSessionState(error = error.message ?: "تعذر الاتصال بالسيرفر")
+        }
+    }
+
+    suspend fun resumeSendSession(resolution: String? = null): SendSessionState =
+        withContext(Dispatchers.IO) {
+            try {
+                val body = JSONObject().apply {
+                    resolution?.takeIf { it.isNotBlank() }?.let { put("resolution", it) }
+                }
+                requestSendSession("POST", "/invoice/session/resume", body)
+            } catch (error: Exception) {
+                SendSessionState(error = error.message ?: "تعذر استكمال الإرسال")
+            }
+        }
+
+    suspend fun cancelSendSession(): SendSessionState = withContext(Dispatchers.IO) {
+        try {
+            requestSendSession("POST", "/invoice/session/cancel", JSONObject())
+        } catch (error: Exception) {
+            SendSessionState(error = error.message ?: "تعذر إلغاء جلسة الإرسال")
+        }
+    }
+
+    suspend fun restartSendSession(): SendSessionState = withContext(Dispatchers.IO) {
+        try {
+            requestSendSession("POST", "/invoice/session/restart", JSONObject())
+        } catch (error: Exception) {
+            SendSessionState(error = error.message ?: "تعذر إعادة الإرسال من البداية")
         }
     }
 
@@ -593,8 +761,13 @@ class InvoiceRepository(private val context: Context) {
                 "✅ تم الإرسال بنجاح!"
             } else {
                 val errorBody = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                val detail = if (errorBody.isBlank()) "" else " - $errorBody"
-                "⚠️ خطأ: $responseCode$detail"
+                val serverMessage = runCatching {
+                    JSONObject(errorBody).optString("error", "")
+                }.getOrDefault("")
+                val detail = serverMessage.ifBlank {
+                    if (errorBody.isBlank()) "خطأ HTTP $responseCode" else errorBody
+                }
+                "⚠️ $detail"
             }
 
         } catch (e: Exception) {
@@ -603,7 +776,9 @@ class InvoiceRepository(private val context: Context) {
     }
 
     private fun bitmapToBase64(bitmap: Bitmap): String {
-        val maxW = 1600; val maxH = 2400
+        // Long invoices have many narrow rows. The former 1600x2400 cap made
+        // text in a 25+ item invoice too small for reliable OCR.
+        val maxW = 2400; val maxH = 3600
         val scale = minOf(maxW.toFloat() / bitmap.width, maxH.toFloat() / bitmap.height, 1f)
         val scaled = if (scale < 1f)
             Bitmap.createScaledBitmap(
@@ -612,8 +787,14 @@ class InvoiceRepository(private val context: Context) {
                 (bitmap.height * scale).toInt(), true
             )
         else bitmap
-        val stream = ByteArrayOutputStream()
-        scaled.compress(Bitmap.CompressFormat.JPEG, 85, stream)
-        return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+        return try {
+            val stream = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, 88, stream)
+            Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+        } finally {
+            // The resized copy can be tens of MB in memory. Release it before
+            // navigating to mapping; never recycle the caller-owned bitmap.
+            if (scaled !== bitmap) scaled.recycle()
+        }
     }
 }

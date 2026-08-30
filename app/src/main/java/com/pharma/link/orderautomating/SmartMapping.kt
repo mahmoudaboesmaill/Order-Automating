@@ -28,6 +28,9 @@ interface SmartMappingDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(mappings: List<SmartMapping>)
 
+    @Query("DELETE FROM smart_mapping WHERE supplierCode = :supplierCode AND invoiceName = :invoiceName")
+    suspend fun deleteMapping(supplierCode: String, invoiceName: String)
+
     @Query("DELETE FROM smart_mapping")
     suspend fun deleteAll()
 

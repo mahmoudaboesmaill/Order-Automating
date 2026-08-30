@@ -15,8 +15,10 @@ import math
 import os
 import re
 import socket
+import time
 from threading import Lock
 import unicodedata
+import uuid
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -51,7 +53,13 @@ PRICE_ALERTS_PATH = RUNTIME_DIR / "price_alerts.txt"
 HEADER_PATH = RUNTIME_DIR / "final_invoice_header.tsv"
 ITEMS_PATH = RUNTIME_DIR / "final_invoice_items.tsv"
 INVOICE_PATH = RUNTIME_DIR / "final_invoice.json"
+SEND_SESSION_PATH = RUNTIME_DIR / "send_session.json"
+ROBOT_CONTROL_PATH = RUNTIME_DIR / "robot_control.ini"
+ROBOT_CHECKPOINT_PATH = RUNTIME_DIR / "robot_checkpoint.state"
 ROBOT_PATH = PROJECT_DIR / "OrderRobot.ahk"
+
+_SEND_SESSION_LOCK = Lock()
+_ACTIVE_SEND_STATUSES = {"launching", "running", "paused", "interrupted", "cancelling"}
 
 
 
@@ -146,6 +154,276 @@ def atomic_write_json(path: Path, value: Any) -> None:
     atomic_write_text(path, json.dumps(value, ensure_ascii=False, indent=2))
 
 
+def _safe_control_value(value: Any) -> str:
+    return str(value).replace("\r", " ").replace("\n", " ").strip()
+
+
+def _write_robot_control(
+    session: dict[str, Any],
+    *,
+    mode: str,
+    start_index: int,
+    skip_header: bool,
+    expected_window_id: int,
+    command: str = "none",
+) -> None:
+    values = {
+        "job_id": session["job_id"],
+        "mode": mode,
+        "start_index": start_index,
+        "skip_header": 1 if skip_header else 0,
+        "expected_window_id": expected_window_id,
+        "supplier_code": session["supplier_code"],
+        "invoice_number": session["invoice_number"],
+        "total_items": session["total_items"],
+        "command": command,
+    }
+    lines = ["[robot]"] + [
+        f"{key}={_safe_control_value(value)}" for key, value in values.items()
+    ]
+    atomic_write_text(ROBOT_CONTROL_PATH, "\n".join(lines) + "\n")
+
+
+def _write_robot_checkpoint(
+    *,
+    job_id: str,
+    status: str,
+    phase: str,
+    header_entered: bool,
+    next_index: int,
+    current_index: int,
+    total_items: int,
+    window_id: int,
+    pid: int = 0,
+) -> dict[str, Any]:
+    checkpoint = {
+        "job_id": job_id,
+        "status": status,
+        "phase": phase,
+        "header_entered": 1 if header_entered else 0,
+        "next_index": next_index,
+        "current_index": current_index,
+        "total_items": total_items,
+        "window_id": window_id,
+        "pid": pid,
+        "updated_epoch": int(time.time()),
+    }
+    atomic_write_text(
+        ROBOT_CHECKPOINT_PATH,
+        "\n".join(f"{key}={value}" for key, value in checkpoint.items()) + "\n",
+    )
+    return checkpoint
+
+
+def _read_robot_checkpoint(job_id: str) -> dict[str, Any] | None:
+    if not ROBOT_CHECKPOINT_PATH.is_file():
+        return None
+    try:
+        raw: dict[str, str] = {}
+        for line in ROBOT_CHECKPOINT_PATH.read_text(encoding="utf-8-sig").splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            raw[key.strip()] = value.strip()
+        if raw.get("job_id") != job_id:
+            return None
+        return {
+            "job_id": job_id,
+            "status": raw.get("status", "interrupted"),
+            "phase": raw.get("phase", "unknown"),
+            "header_entered": raw.get("header_entered", "0") == "1",
+            "next_index": int(raw.get("next_index", "0")),
+            "current_index": int(raw.get("current_index", "-1")),
+            "total_items": int(raw.get("total_items", "0")),
+            "window_id": int(raw.get("window_id", "0")),
+            "pid": int(raw.get("pid", "0")),
+            "updated_epoch": int(raw.get("updated_epoch", "0")),
+        }
+    except (OSError, ValueError):
+        app.logger.exception("Could not read the robot checkpoint")
+        return None
+
+
+def _load_send_session() -> dict[str, Any] | None:
+    if not SEND_SESSION_PATH.is_file():
+        return None
+    try:
+        value = json.loads(SEND_SESSION_PATH.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) and value.get("job_id") else None
+    except (OSError, json.JSONDecodeError):
+        app.logger.exception("Could not read the send session")
+        return None
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            process_query_limited_information = 0x1000
+            still_active = 259
+            handle = ctypes.windll.kernel32.OpenProcess(
+                process_query_limited_information, False, pid
+            )
+            if not handle:
+                # Access denied normally means the process exists at a higher
+                # integrity level. Treat that as alive so a second robot can
+                # never be launched merely because it cannot be inspected.
+                return ctypes.windll.kernel32.GetLastError() == 5
+            try:
+                exit_code = ctypes.c_ulong()
+                if not ctypes.windll.kernel32.GetExitCodeProcess(
+                    handle, ctypes.byref(exit_code)
+                ):
+                    return False
+                return exit_code.value == still_active
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
+        except (AttributeError, OSError):
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError, PermissionError):
+        return False
+
+
+def _session_payload(session: dict[str, Any] | None = None) -> dict[str, Any]:
+    session = session or _load_send_session()
+    if not session:
+        return {"exists": False, "status": "none"}
+
+    total_items = int(session.get("total_items", 0))
+    checkpoint = _read_robot_checkpoint(str(session["job_id"])) or {
+        "status": session.get("status", "interrupted"),
+        "phase": "checkpoint_missing",
+        "header_entered": False,
+        "next_index": 0,
+        "current_index": -1,
+        "total_items": total_items,
+        "window_id": 0,
+        "pid": 0,
+        "updated_epoch": int(session.get("updated_epoch", 0)),
+    }
+    status = str(checkpoint["status"])
+    pid = int(checkpoint["pid"])
+    process_alive = _pid_is_running(pid)
+    age_seconds = max(0, int(time.time()) - int(checkpoint["updated_epoch"]))
+    if status in {"running", "paused", "cancelling"} and not process_alive:
+        status = "interrupted"
+    elif status == "launching" and not process_alive and age_seconds > 15:
+        status = "interrupted"
+
+    next_index = max(0, min(int(checkpoint["next_index"]), total_items))
+    current_index = int(checkpoint["current_index"])
+    phase = str(checkpoint["phase"])
+    header_entered = bool(checkpoint["header_entered"])
+    window_id = int(checkpoint["window_id"])
+    ambiguous_phases = {
+        "item_in_progress",
+        "item_needs_manual_fix",
+        "item_error",
+    }
+    requires_resolution = (
+        status == "interrupted"
+        and current_index >= 0
+        and phase in ambiguous_phases
+    )
+    requires_restart = status == "interrupted" and (
+        not header_entered
+        or window_id <= 0
+        or phase in {"header_in_progress", "resume_window_missing", "checkpoint_missing"}
+    )
+    can_resume = (
+        next_index < total_items
+        and header_entered
+        and window_id > 0
+        and (
+            (status == "paused" and process_alive and phase == "safe_boundary")
+            or status == "interrupted"
+        )
+        and not requires_restart
+    )
+
+    messages = {
+        "launching": "جاري تشغيل روبوت الإدخال...",
+        "running": f"جارٍ الإدخال: {next_index}/{total_items}",
+        "paused": f"الإرسال متوقف مؤقتاً: {next_index}/{total_items}",
+        "interrupted": f"يوجد إرسال غير مكتمل: {next_index}/{total_items}",
+        "cancelling": "سيتم إلغاء الجلسة عند أول نقطة آمنة.",
+        "completed": f"اكتمل إدخال {total_items}/{total_items}. راجع الفاتورة واحفظها يدوياً.",
+        "cancelled": "تم إلغاء جلسة الإرسال.",
+    }
+    return {
+        "exists": True,
+        "job_id": session["job_id"],
+        "supplier_code": str(session.get("supplier_code", "")),
+        "invoice_number": str(session.get("invoice_number", "")),
+        "status": status,
+        "phase": phase,
+        "header_entered": header_entered,
+        "next_index": next_index,
+        "last_completed_index": next_index - 1,
+        "current_index": current_index,
+        "completed_items": next_index,
+        "total_items": total_items,
+        "window_id": window_id,
+        "pid": pid,
+        "process_alive": process_alive,
+        "can_resume": can_resume,
+        "requires_resolution": requires_resolution,
+        "requires_restart": requires_restart,
+        "message": messages.get(status, f"حالة الإرسال: {status}"),
+    }
+
+
+def _launch_robot_session(
+    session: dict[str, Any],
+    *,
+    mode: str,
+    start_index: int,
+    skip_header: bool,
+    expected_window_id: int,
+) -> None:
+    _write_robot_control(
+        session,
+        mode=mode,
+        start_index=start_index,
+        skip_header=skip_header,
+        expected_window_id=expected_window_id,
+    )
+    _write_robot_checkpoint(
+        job_id=str(session["job_id"]),
+        status="launching",
+        phase=f"{mode}_launching",
+        header_entered=skip_header,
+        next_index=start_index,
+        current_index=-1,
+        total_items=int(session["total_items"]),
+        window_id=expected_window_id,
+    )
+    session["status"] = "launching"
+    session["updated_epoch"] = int(time.time())
+    session["last_mode"] = mode
+    atomic_write_json(SEND_SESSION_PATH, session)
+    try:
+        os.startfile(str(ROBOT_PATH), arguments="--run")
+    except OSError:
+        _write_robot_checkpoint(
+            job_id=str(session["job_id"]),
+            status="interrupted",
+            phase="launch_failed",
+            header_entered=skip_header,
+            next_index=start_index,
+            current_index=-1,
+            total_items=int(session["total_items"]),
+            window_id=expected_window_id,
+        )
+        raise
+
+
 def as_finite_number(value: Any, field_name: str, default: float = 0.0) -> float:
     if value is None or value == "":
         return default
@@ -162,7 +440,7 @@ def build_ocr_prompt(supplier_code: str, column_hint: str) -> str:
     supplier_context = {
         "29": "Ibn Sina: sale_p is سعر الجمهور and may legitimately be blank; when blank return sale_p=0 and do not invent it. pharmacist_price is سعر الصيدلي. line_total_as_printed is الإجمالي بدون الضريبة. Android calculates purchase two ways: pharmacist_price + the TOP pharmacist number in هامش صيدلي وموزع, and (line_total_as_printed / paid quantity) + that same pharmacist margin. If tax_total (ضريبة ق.م for the row) is greater than zero, the valid pharmacist margin is zero. The lower stacked number is distributor margin and is never added. The خصم الصيدلي is informational only.",
         "38": "Pharma Overseas: extract the printed values only; Android performs both calculations. pharmacist_price must be the raw value under سعر صيدلي ج.م, pharmacist_margin must be the raw value under هامش ثابت للصيدلي, line_total_as_printed must be the raw value under إجمالي القيمة, quantity must be the paid quantity, and tax_per_item must be the raw value under ض.ق مضافة ج.م. IMPORTANT BUSINESS RULE: decide whether the row is taxed only from its per-unit ض.ق مضافة ج.م cell. When tax_per_item > 0 the valid pharmacist margin is zero. When tax_per_item is zero, extract and preserve هامش ثابت للصيدلي because it must be added to purchase price. tax_total alone never makes a row taxed. Never copy إجمالي ض.ق.م, tax_per_item, or another neighbouring value into pharmacist_margin. Keep these fields independent and never calculate or replace pharmacist_price from the line total. sale_p is سعر الجمهور. Ignore هامش ثابت للموزع and خصم الصيدلي in the purchase calculation, but extract them only into their own fields. Android verifies that pharmacist_price + the valid margin equals (line_total_as_printed / quantity - tax_per_item) + the valid margin. If they conflict, reread the original cells instead of forcing either value to match. Quantity is the number before a notation such as 2+1 and bonus is the number after it. IMPORTANT FOR NARROW PHARMA COLUMNS: a decimal value can wrap vertically inside the same cell, with the final fractional digit printed directly below the first line (for example 104.9 with a 6 underneath is 104.96). Inspect the complete cell and join only a digit that is visibly the continuation of that same value; never drop it, move it to the next row, or borrow it from an adjacent column.",
-        "175": "Dream: unit_price is the pharmacy purchase cost even though the printed heading says sale price. Extract line_total_as_printed independently so Android can compare unit_price with line_total_as_printed / quantity. consumer_price is informational only; never set sale_p and never update the E-PLUS sale price.",
+        "175": "Dream: unit_price is the pharmacy purchase cost even though the printed heading says sale price. Extract line_total_as_printed independently so Android can compare unit_price with line_total_as_printed / quantity. consumer_price is informational only; never set sale_p and never update the E-PLUS sale price. For invoice_total_as_printed, read ONLY the final invoice/net amount explicitly labelled as invoice total or net invoice. Never use الدين, قيمة الدين, المديونية, الرصيد الحالي, الرصيد السابق, customer balance, or any balance figure as the invoice total.",
         "198": "United: there is no bonus and no margin; always return bonus=0, pharmacist_margin=0, and distributor_margin=0. unit_price and sale_p are the printed public sale price. line_total_as_printed divided by quantity is the authoritative purchase cost and Android compares it with public sale price after discount. Never copy location, serial, or another column into bonus.",
         "218": "Tabark/Multi Stores: there is no bonus and no margin; always return bonus=0, pharmacist_margin=0, and distributor_margin=0. The column ك immediately before the item name is the supplier item code, never a price. Never copy ك into unit_price or sale_p. The printed public sale price is only the value under the column س. بيع (after the stock/current-balance column), and must be copied to both unit_price and sale_p. line_total_as_printed divided by quantity is the authoritative purchase cost and Android compares it with public sale price after discount. For invoice_total_as_printed, read ONLY the final summary value explicitly labelled صافي الفاتورة. Never use الرصيد الحالي, الرصيد السابق, stock balance, customer balance, or any other balance as the invoice total. If the sale-price cell is unreadable, return sale_p=0 and unit_price=0 rather than guessing from ك, quantity, stock, or a neighbouring row.",
     }.get(
@@ -266,6 +544,31 @@ different row or from the summary block.
 """.strip()
 
 
+def build_training_prompt(supplier_code: str) -> str:
+    """Use a small names-only schema for mapping practice on archived invoices."""
+    supplier_hint = f" The selected supplier code is {supplier_code}." if supplier_code else ""
+    return f"""Read this pharmacy invoice only to collect product names for mapping practice.{supplier_hint}
+Return one JSON object exactly in this shape: {{"item_names":["printed product name"]}}.
+Include every real product row in visible order and preserve strength, dosage form, pack size,
+and XR/CR/SR distinctions exactly as printed. Exclude headers, totals, customer details,
+supplier names, codes without a product name, page numbers, and duplicate copies of the same
+row. Do not return quantities, prices, invoice totals, or commentary. Never guess an unreadable
+name; omit it instead."""
+
+
+MISTRAL_TRAINING_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "item_names": {
+            "type": "array",
+            "items": {"type": "string"},
+        }
+    },
+    "required": ["item_names"],
+}
+
+
 MISTRAL_INVOICE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -327,6 +630,155 @@ def _mistral_document_reference(encoded_data: str, mime_type: str) -> dict[str, 
     if mime_type == "application/pdf":
         return {"type": "document_url", "document_url": data_url}
     return {"type": "image_url", "image_url": data_url}
+
+
+MAX_ADDITIONAL_INVOICE_IMAGES = 3
+
+
+def invoice_image_pages(
+    data: dict[str, Any], mime_type: str
+) -> list[tuple[str, str]]:
+    """Return the primary image plus optional ordered continuation pages."""
+    additional = data.get("additional_images", [])
+    if additional is None:
+        additional = []
+    if not isinstance(additional, list):
+        raise ValueError("additional_images must be a JSON array")
+    if len(additional) > MAX_ADDITIONAL_INVOICE_IMAGES:
+        raise ValueError(
+            f"A maximum of {MAX_ADDITIONAL_INVOICE_IMAGES + 1} invoice images is supported"
+        )
+    if additional and mime_type not in {"image/jpeg", "image/png"}:
+        raise ValueError("Additional pages are supported only for invoice images")
+
+    pages = [(mime_type, data["data"])]
+    for encoded_page in additional:
+        if not isinstance(encoded_page, str) or not encoded_page:
+            raise ValueError("Every additional invoice image must contain base64 data")
+        # Android normalises every gallery page to JPEG before sending it.
+        pages.append(("image/jpeg", encoded_page))
+    return pages
+
+
+def build_gemini_invoice_content(
+    prompt: str, pages: list[tuple[str, str]]
+) -> list[Any]:
+    """Build ordered Gemini parts without flattening multi-page images."""
+    content: list[Any] = [prompt]
+    if len(pages) > 1:
+        content.append(
+            "MULTI-PAGE INVOICE: the following images are consecutive pages of "
+            "one invoice in page order. Extract item rows from every page exactly "
+            "once. Use header fields from the first page and the final invoice "
+            "summary from the last page. Do not treat repeated column headers as items."
+        )
+    for index, (page_mime_type, encoded_page) in enumerate(pages, start=1):
+        if len(pages) > 1:
+            content.append(f"INVOICE PAGE {index} OF {len(pages)}")
+        content.append({"mime_type": page_mime_type, "data": encoded_page})
+    return content
+
+
+def build_invoice_recovery_crops(
+    pages: list[tuple[str, str]]
+) -> list[tuple[str, bytes]]:
+    """Create enlarged overlapping vertical sections for a zero-item OCR retry."""
+    if Image is None:
+        return []
+
+    crops: list[tuple[str, bytes]] = []
+    for page_index, (page_mime_type, encoded_page) in enumerate(pages, start=1):
+        if page_mime_type not in {"image/jpeg", "image/png"}:
+            continue
+        try:
+            with Image.open(BytesIO(base64.b64decode(encoded_page))) as source:
+                image = source.convert("RGB")
+            width, height = image.size
+            midpoint = height // 2
+            overlap = max(12, int(height * 0.08))
+            sections = (
+                ("upper", (0, 0, width, min(height, midpoint + overlap))),
+                ("lower", (0, max(0, midpoint - overlap), width, height)),
+            )
+            for section_name, box in sections:
+                crop = image.crop(box)
+                scale = min(1.6, 4000 / max(crop.width, crop.height))
+                if scale > 1.05:
+                    crop = crop.resize(
+                        (int(crop.width * scale), int(crop.height * scale))
+                    )
+                crop = ImageEnhance.Contrast(crop).enhance(1.18)
+                crop = ImageEnhance.Sharpness(crop).enhance(1.35)
+                output = BytesIO()
+                crop.save(output, format="JPEG", quality=92)
+                crops.append(
+                    (f"page {page_index} {section_name} section", output.getvalue())
+                )
+            image.close()
+        except Exception:
+            app.logger.warning(
+                "Could not create zero-item recovery crops for invoice page %d",
+                page_index,
+            )
+    return crops
+
+
+def build_empty_items_recovery_prompt(prompt: str, page_count: int) -> str:
+    return f"""{prompt}
+
+ZERO-ITEM RECOVERY PASS: the full-image read found the invoice header but returned
+no item rows. The following images are enlarged upper/lower sections from
+{page_count} ordered invoice page(s). Adjacent sections deliberately overlap.
+Read the complete product table from every section, preserve the original page
+and row order, and output each printed row exactly once. A row visible in an
+overlap is the same physical row, not a duplicate item. Ignore repeated column
+headings and page totals as product rows.
+"""
+
+
+def build_gemini_empty_items_recovery_content(
+    prompt: str, pages: list[tuple[str, str]]
+) -> list[Any] | None:
+    crops = build_invoice_recovery_crops(pages)
+    if not crops:
+        return None
+    content: list[Any] = [build_empty_items_recovery_prompt(prompt, len(pages))]
+    for label, crop in crops:
+        content.append(label.upper())
+        content.append(
+            {
+                "mime_type": "image/jpeg",
+                "data": base64.b64encode(crop).decode("ascii"),
+            }
+        )
+    return content
+
+
+def combine_invoice_images_as_pdf(encoded_pages: list[str]) -> bytes | None:
+    """Combine ordered JPEG pages for providers that accept one document only."""
+    if Image is None or not encoded_pages:
+        return None
+    images: list[Any] = []
+    try:
+        for encoded_page in encoded_pages:
+            with Image.open(BytesIO(base64.b64decode(encoded_page))) as source:
+                images.append(source.convert("RGB"))
+        output = BytesIO()
+        images[0].save(
+            output,
+            format="PDF",
+            save_all=True,
+            append_images=images[1:],
+            resolution=200,
+            quality=90,
+        )
+        return output.getvalue()
+    except Exception:
+        app.logger.warning("Could not combine invoice image pages into a PDF")
+        return None
+    finally:
+        for image in images:
+            image.close()
 
 
 def build_pharma_columns_crop(encoded_data: str, mime_type: str) -> bytes | None:
@@ -418,6 +870,54 @@ def call_mistral_ocr(
     return payload
 
 
+def call_mistral_training_ocr(
+    api_key: str,
+    encoded_data: str,
+    mime_type: str,
+    prompt: str,
+) -> list[str]:
+    body = {
+        "model": MISTRAL_OCR_MODEL,
+        "document": _mistral_document_reference(encoded_data, mime_type),
+        "document_annotation_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "mapping_training_names",
+                "schema": MISTRAL_TRAINING_SCHEMA,
+                "strict": True,
+            },
+        },
+        "document_annotation_prompt": prompt,
+        "table_format": "html",
+    }
+    mistral_request = Request(
+        MISTRAL_API_URL,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(mistral_request, timeout=75) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")[:400]
+        raise RuntimeError(f"Mistral HTTP {error.code}: {detail}") from error
+    except URLError as error:
+        raise RuntimeError(f"Mistral connection failed: {error.reason}") from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Mistral returned invalid JSON") from error
+
+    annotation = result.get("document_annotation") if isinstance(result, dict) else None
+    if isinstance(annotation, str):
+        return clean_training_response(annotation)
+    if isinstance(annotation, dict):
+        return normalise_training_names(annotation.get("item_names"))
+    raise RuntimeError("Mistral response did not contain training item names")
+
+
 def choose_model(api_key: str) -> Any:
     if genai is None:
         raise RuntimeError("google-generativeai is not installed on the server")
@@ -453,6 +953,28 @@ def clean_json_response(text: str) -> dict[str, Any]:
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         raise ValueError("Gemini response did not contain an invoice items list")
     return payload
+
+
+def normalise_training_names(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        raise ValueError("OCR response did not contain an item_names list")
+    unique: dict[str, str] = {}
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        display_name = " ".join(value.split()).strip()
+        key = unicodedata.normalize("NFKC", display_name).casefold()
+        if key and key not in unique:
+            unique[key] = display_name
+    return list(unique.values())
+
+
+def clean_training_response(text: str) -> list[str]:
+    cleaned = text.replace("```json", "").replace("```", "").strip()
+    payload = json.loads(cleaned)
+    if not isinstance(payload, dict):
+        raise ValueError("OCR training response must be a JSON object")
+    return normalise_training_names(payload.get("item_names"))
 
 
 def _as_payload_number(value: Any) -> float:
@@ -614,14 +1136,14 @@ def repair_pharma_payload(payload: dict[str, Any], supplier_code: str) -> dict[s
 def repair_distributor_invoice_total(
     payload: dict[str, Any], supplier_code: str
 ) -> dict[str, Any]:
-    """Reject a balance misread as the net total for United/Tabark invoices.
+    """Reject debt/balance figures misread as the invoice total.
 
-    These suppliers have neither bonus nor fixed margins, so complete row totals
-    must add up to the net invoice. We replace the extracted summary only when
-    every row independently reconciles with quantity, public price and discount,
-    and the summary disagreement is above the app's one-pound tolerance.
+    Dream rows reconcile purchase cost with quantity and printed line total.
+    United/Tabark rows reconcile public price, quantity and discount. In either
+    case, replace the extracted summary only when every row independently
+    reconciles and the disagreement is above the app's one-pound tolerance.
     """
-    if supplier_code not in {"198", "218"}:
+    if supplier_code not in {"175", "198", "218"}:
         return payload
     items = payload.get("items")
     if not isinstance(items, list) or not items:
@@ -633,6 +1155,19 @@ def repair_distributor_invoice_total(
             return payload
         quantity = _as_payload_number(item.get("quantity"))
         line_total = _as_payload_number(item.get("line_total_as_printed"))
+        if supplier_code == "175":
+            purchase_cost = _as_payload_number(item.get("unit_price"))
+            if quantity <= 0 or purchase_cost <= 0:
+                return payload
+            expected_line_total = purchase_cost * quantity
+            if line_total <= 0:
+                line_total = expected_line_total
+            line_tolerance = max(0.10, line_total * 0.005)
+            if abs(expected_line_total - line_total) > line_tolerance:
+                return payload
+            calculated_total += line_total
+            continue
+
         public_price = _as_payload_number(item.get("sale_p")) or _as_payload_number(
             item.get("unit_price")
         )
@@ -1259,6 +1794,99 @@ def inspect_pdf() -> tuple[Any, int] | Any:
         return jsonify({"error": "Could not inspect the invoice PDF"}), 500
 
 
+@app.post("/training-ocr")
+def process_training_ocr() -> tuple[Any, int] | Any:
+    """Extract names for local mapping practice without creating E-PLUS artefacts."""
+    auth_error = require_token()
+    if auth_error:
+        return auth_error
+    if not GEMINI_KEYS and not MISTRAL_KEYS:
+        return jsonify({"error": "Configure GEMINI_API_KEY(S) or MISTRAL_API_KEY on the server"}), 503
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get("data"), str) or not data["data"]:
+        return jsonify({"error": "A base64 invoice payload is required"}), 400
+    requested_provider = str(data.get("ocr_provider", "")).strip().lower()
+    provider_mode = requested_provider if requested_provider in {
+        "auto", "gemini", "gemini-only", "mistral", "mistral-only"
+    } else OCR_PROVIDER
+    if provider_mode in {"mistral", "mistral-only"} and not MISTRAL_KEYS:
+        return jsonify({"error": "Mistral is selected, but MISTRAL_API_KEY is missing on the server"}), 503
+    if provider_mode in {"gemini", "gemini-only"} and not GEMINI_KEYS:
+        return jsonify({"error": "Gemini is selected, but GEMINI_API_KEY(S) are missing on the server"}), 503
+    if GEMINI_KEYS and genai is None and not MISTRAL_KEYS:
+        return jsonify({"error": "google-generativeai is not installed on the server"}), 503
+    if provider_mode in {"gemini", "gemini-only"} and genai is None:
+        return jsonify({"error": "google-generativeai is not installed on the server"}), 503
+
+    mime_type = data.get("mime_type")
+    if mime_type not in {"image/jpeg", "image/png", "application/pdf"}:
+        mime_type = "application/pdf" if data["data"].startswith("JVBERi0") else "image/jpeg"
+    prompt = build_training_prompt(str(data.get("supplier_code", "")).strip())
+
+    gemini_errors: list[str] = []
+    quota_failures = 0
+    gemini_keys_for_request = (
+        () if provider_mode in {"mistral", "mistral-only"} else GEMINI_KEYS
+    )
+    for key_index, key in enumerate(gemini_keys_for_request, start=1):
+        try:
+            model = choose_model(key)
+            model_response = model.generate_content(
+                [prompt, {"mime_type": mime_type, "data": data["data"]}],
+                generation_config={
+                    "temperature": 0.0,
+                    "top_p": 0.1,
+                    "max_output_tokens": 4096,
+                },
+            )
+            names = clean_training_response(model_response.text)
+            app.logger.info(
+                "Training OCR extracted %d names with Gemini key %d",
+                len(names),
+                key_index,
+            )
+            response = jsonify({"item_names": names})
+            response.headers["X-OCR-Provider"] = "gemini"
+            return response
+        except Exception as error:
+            gemini_errors.append(type(error).__name__)
+            if _is_gemini_quota_error(error):
+                quota_failures += 1
+
+    mistral_errors: list[str] = []
+    mistral_keys_for_request = (
+        () if provider_mode in {"gemini", "gemini-only"} else MISTRAL_KEYS
+    )
+    for key_index, key in enumerate(mistral_keys_for_request, start=1):
+        try:
+            names = call_mistral_training_ocr(
+                api_key=key,
+                encoded_data=data["data"],
+                mime_type=mime_type,
+                prompt=prompt,
+            )
+            app.logger.info(
+                "Training OCR extracted %d names with Mistral key %d",
+                len(names),
+                key_index,
+            )
+            response = jsonify({"item_names": names})
+            response.headers["X-OCR-Provider"] = "mistral"
+            return response
+        except Exception as error:
+            mistral_errors.append(type(error).__name__)
+
+    if quota_failures == len(gemini_keys_for_request) and gemini_keys_for_request and not mistral_errors:
+        return jsonify({"error": "Gemini quota exhausted or rate-limited."}), 429, {"Retry-After": "60"}
+    app.logger.error(
+        "Training OCR failed: Gemini=%s Mistral=%s",
+        ", ".join(gemini_errors),
+        ", ".join(mistral_errors),
+    )
+    return jsonify({"error": "Training OCR processing failed. Please retry."}), 502
+
+
 @app.post("/gemini")
 def process_ocr() -> tuple[Any, int] | Any:
     auth_error = require_token()
@@ -1299,6 +1927,10 @@ def process_ocr() -> tuple[Any, int] | Any:
             data["data"] = base64.b64encode(selected_pdf).decode("ascii")
         except (ValueError, RuntimeError) as error:
             return jsonify({"error": str(error)}), 400
+    try:
+        invoice_pages = invoice_image_pages(data, mime_type)
+    except ValueError as error:
+        return jsonify({"error": str(error)}), 400
     prompt = build_ocr_prompt(
         str(data.get("supplier_code", "")).strip(),
         str(data.get("column_hint", "")).strip(),
@@ -1318,7 +1950,7 @@ def process_ocr() -> tuple[Any, int] | Any:
         try:
             model = choose_model(key)
             response = model.generate_content(
-                [prompt, {"mime_type": mime_type, "data": data["data"]}],
+                build_gemini_invoice_content(prompt, invoice_pages),
                 generation_config={
                     "temperature": 0.0,
                     "top_p": 0.1,
@@ -1326,6 +1958,36 @@ def process_ocr() -> tuple[Any, int] | Any:
                 },
             )
             payload = clean_json_response(response.text)
+            if not payload.get("items") and mime_type in {"image/jpeg", "image/png"}:
+                recovery_content = build_gemini_empty_items_recovery_content(
+                    prompt, invoice_pages
+                )
+                if recovery_content:
+                    try:
+                        recovery = model.generate_content(
+                            recovery_content,
+                            generation_config={
+                                "temperature": 0.0,
+                                "top_p": 0.1,
+                                "max_output_tokens": 8192,
+                            },
+                        )
+                        recovered_payload = clean_json_response(recovery.text)
+                        if recovered_payload.get("items"):
+                            payload = recovered_payload
+                            app.logger.info(
+                                "OCR zero-item recovery succeeded with %d row(s)",
+                                len(payload["items"]),
+                            )
+                        else:
+                            app.logger.warning(
+                                "OCR zero-item recovery completed without item rows"
+                            )
+                    except Exception as recovery_error:
+                        app.logger.warning(
+                            "OCR zero-item recovery skipped: %s",
+                            type(recovery_error).__name__,
+                        )
             pharma_margin_candidates: list[dict[str, Any]] = []
             if str(data.get("supplier_code", "")).strip() == "38":
                 pharma_margin_candidates.append(json.loads(json.dumps(payload)))
@@ -1337,10 +1999,9 @@ def process_ocr() -> tuple[Any, int] | Any:
             if _needs_tabark_price_review(payload, str(data.get("supplier_code", "")).strip()):
                 try:
                     correction = model.generate_content(
-                        [
-                            build_price_review_prompt(prompt, payload),
-                            {"mime_type": mime_type, "data": data["data"]},
-                        ],
+                        build_gemini_invoice_content(
+                            build_price_review_prompt(prompt, payload), invoice_pages
+                        ),
                         generation_config={
                             "temperature": 0.0,
                             "top_p": 0.1,
@@ -1368,10 +2029,10 @@ def process_ocr() -> tuple[Any, int] | Any:
                 # before the payload reaches the Android calculation rule.
                 try:
                     correction = model.generate_content(
-                        [
+                        build_gemini_invoice_content(
                             build_pharma_column_review_prompt(prompt, payload),
-                            {"mime_type": mime_type, "data": data["data"]},
-                        ],
+                            invoice_pages,
+                        ),
                         generation_config={
                             "temperature": 0.0,
                             "top_p": 0.1,
@@ -1399,10 +2060,10 @@ def process_ocr() -> tuple[Any, int] | Any:
                 # invoices on the faster single-pass path.
                 try:
                     correction = model.generate_content(
-                        [
+                        build_gemini_invoice_content(
                             build_pharma_decimal_review_prompt(prompt, payload),
-                            {"mime_type": mime_type, "data": data["data"]},
-                        ],
+                            invoice_pages,
+                        ),
                         generation_config={
                             "temperature": 0.0,
                             "top_p": 0.1,
@@ -1439,10 +2100,10 @@ def process_ocr() -> tuple[Any, int] | Any:
                         if isinstance(supplied_crop, str) and supplied_crop
                         else build_pharma_columns_crop(data["data"], mime_type)
                     )
-                    review_parts: list[Any] = [
+                    review_parts = build_gemini_invoice_content(
                         build_pharma_values_review_prompt(prompt, payload),
-                        {"mime_type": mime_type, "data": data["data"]},
-                    ]
+                        invoice_pages,
+                    )
                     if pharma_crop:
                         review_parts.append(
                             {
@@ -1518,10 +2179,10 @@ def process_ocr() -> tuple[Any, int] | Any:
             if str(data.get("supplier_code", "")).strip() == "218":
                 try:
                     total_correction = model.generate_content(
-                        [
+                        build_gemini_invoice_content(
                             build_tabark_total_review_prompt(prompt, payload),
-                            {"mime_type": mime_type, "data": data["data"]},
-                        ],
+                            invoice_pages,
+                        ),
                         generation_config={
                             "temperature": 0.0,
                             "top_p": 0.1,
@@ -1564,14 +2225,45 @@ def process_ocr() -> tuple[Any, int] | Any:
     mistral_keys_for_request = (
         () if provider_mode in {"gemini", "gemini-only"} else MISTRAL_KEYS
     )
+    mistral_document_data = data["data"]
+    mistral_document_mime_type = mime_type
+    if mistral_keys_for_request and len(invoice_pages) > 1:
+        combined_pdf = combine_invoice_images_as_pdf(
+            [encoded_page for _, encoded_page in invoice_pages]
+        )
+        if combined_pdf:
+            mistral_document_data = base64.b64encode(combined_pdf).decode("ascii")
+            mistral_document_mime_type = "application/pdf"
     for key_index, key in enumerate(mistral_keys_for_request, start=1):
         try:
+            if len(invoice_pages) > 1 and mistral_document_mime_type != "application/pdf":
+                raise RuntimeError("Could not prepare the multi-page invoice for Mistral")
             payload = call_mistral_ocr(
                 api_key=key,
-                encoded_data=data["data"],
-                mime_type=mime_type,
+                encoded_data=mistral_document_data,
+                mime_type=mistral_document_mime_type,
                 prompt=prompt,
             )
+            if not payload.get("items") and mime_type in {"image/jpeg", "image/png"}:
+                recovery_crops = build_invoice_recovery_crops(invoice_pages)
+                recovery_pdf = combine_invoice_images_as_pdf(
+                    [base64.b64encode(crop).decode("ascii") for _, crop in recovery_crops]
+                )
+                if recovery_pdf:
+                    recovered_payload = call_mistral_ocr(
+                        api_key=key,
+                        encoded_data=base64.b64encode(recovery_pdf).decode("ascii"),
+                        mime_type="application/pdf",
+                        prompt=build_empty_items_recovery_prompt(
+                            prompt, len(invoice_pages)
+                        ),
+                    )
+                    if recovered_payload.get("items"):
+                        payload = recovered_payload
+                        app.logger.info(
+                            "Mistral zero-item recovery succeeded with %d row(s)",
+                            len(payload["items"]),
+                        )
             pharma_margin_candidates = []
             if str(data.get("supplier_code", "")).strip() == "38":
                 pharma_margin_candidates.append(json.loads(json.dumps(payload)))
@@ -1585,8 +2277,8 @@ def process_ocr() -> tuple[Any, int] | Any:
                 try:
                     reviewed_payload = call_mistral_ocr(
                         api_key=key,
-                        encoded_data=data["data"],
-                        mime_type=mime_type,
+                        encoded_data=mistral_document_data,
+                        mime_type=mistral_document_mime_type,
                         prompt=build_pharma_values_review_prompt(prompt, payload),
                     )
                     pharma_margin_candidates.append(
@@ -1677,25 +2369,241 @@ def save_invoice() -> tuple[Any, int] | Any:
         supplier_code, invoice_number, items = normalise_invoice(data)
         if not ROBOT_PATH.is_file():
             raise FileNotFoundError(f"Automation script was not found: {ROBOT_PATH}")
-        report = write_robot_files(supplier_code, invoice_number, items)
-        os.startfile(str(ROBOT_PATH), arguments="--run")
-        changed_count = sum(
-            1
-            for line in report.splitlines()
-            if line.startswith(("↑ ", "↓ ", "• "))
-        )
-        return jsonify(
-            {
-                "status": "ready_for_review",
-                "message": "Invoice entered for review; E-PLUS will not save automatically.",
-                "price_changes": changed_count,
+        with _SEND_SESSION_LOCK:
+            existing = _session_payload()
+            if existing.get("exists") and existing.get("status") in _ACTIVE_SEND_STATUSES:
+                return jsonify(
+                    {
+                        "error": "يوجد إرسال غير مكتمل. استكمله أو ألغِ الجلسة قبل إرسال فاتورة أخرى.",
+                        "session": existing,
+                    }
+                ), 409
+
+            report = write_robot_files(supplier_code, invoice_number, items)
+            now = int(time.time())
+            session = {
+                "version": 1,
+                "job_id": uuid.uuid4().hex,
+                "supplier_code": supplier_code,
+                "invoice_number": invoice_number,
+                "total_items": len(items),
+                "status": "launching",
+                "attempt": 1,
+                "created_epoch": now,
+                "updated_epoch": now,
             }
-        )
+            _launch_robot_session(
+                session,
+                mode="start",
+                start_index=0,
+                skip_header=False,
+                expected_window_id=0,
+            )
+            changed_count = sum(
+                1
+                for line in report.splitlines()
+                if line.startswith(("↑ ", "↓ ", "• "))
+            )
+            return jsonify(
+                {
+                    "status": "ready_for_review",
+                    "message": "Invoice entered for review; E-PLUS will not save automatically.",
+                    "price_changes": changed_count,
+                    "session": _session_payload(session),
+                }
+            )
     except (ValueError, FileNotFoundError) as error:
         return jsonify({"error": str(error)}), 400
     except OSError:
         app.logger.exception("Could not start the E-PLUS automation")
         return jsonify({"error": "Could not start the E-PLUS automation"}), 500
+
+
+@app.get("/invoice/session")
+def get_invoice_session() -> tuple[Any, int] | Any:
+    auth_error = require_token()
+    if auth_error:
+        return auth_error
+    with _SEND_SESSION_LOCK:
+        return jsonify(_session_payload())
+
+
+@app.post("/invoice/session/resume")
+def resume_invoice_session() -> tuple[Any, int] | Any:
+    auth_error = require_token()
+    if auth_error:
+        return auth_error
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON object is required"}), 400
+
+    try:
+        with _SEND_SESSION_LOCK:
+            session = _load_send_session()
+            current = _session_payload(session)
+            if not session or not current.get("exists"):
+                return jsonify({"error": "لا توجد جلسة إرسال محفوظة."}), 404
+            if current["status"] in {"completed", "cancelled"}:
+                return jsonify(
+                    {"error": "هذه الجلسة ليست معلقة.", "session": current}
+                ), 409
+
+            if current["process_alive"]:
+                if current["status"] == "paused" and current["phase"] == "safe_boundary":
+                    _write_robot_control(
+                        session,
+                        mode="resume",
+                        start_index=int(current["next_index"]),
+                        skip_header=True,
+                        expected_window_id=int(current["window_id"]),
+                        command="resume",
+                    )
+                    return jsonify(
+                        {
+                            **current,
+                            "message": "تم إرسال أمر الاستكمال للروبوت المفتوح.",
+                        }
+                    )
+                return jsonify(
+                    {
+                        "error": "الروبوت ما زال يعمل. لا يمكن تشغيل نسخة ثانية.",
+                        "session": current,
+                    }
+                ), 409
+
+            if current["requires_restart"]:
+                return jsonify(
+                    {
+                        "error": "لا يمكن ضمان وجود نفس الفاتورة الجزئية داخل E-PLUS. استخدم إعادة البداية فقط بعد مراجعة الشاشة.",
+                        "session": current,
+                    }
+                ), 409
+
+            start_index = int(current["next_index"])
+            if current["requires_resolution"]:
+                resolution = str(data.get("resolution", "")).strip().lower()
+                if resolution not in {"completed", "retry"}:
+                    return jsonify(
+                        {
+                            "error": "يلزم تحديد هل الصنف الذي انقطع عنده الروبوت اكتمل أم يجب إعادته.",
+                            "session": current,
+                        }
+                    ), 409
+                current_index = int(current["current_index"])
+                start_index = current_index + 1 if resolution == "completed" else current_index
+
+            total_items = int(current["total_items"])
+            if start_index >= total_items:
+                _write_robot_checkpoint(
+                    job_id=str(session["job_id"]),
+                    status="completed",
+                    phase="invoice_ready",
+                    header_entered=True,
+                    next_index=total_items,
+                    current_index=-1,
+                    total_items=total_items,
+                    window_id=int(current["window_id"]),
+                )
+                return jsonify(_session_payload(session))
+
+            _launch_robot_session(
+                session,
+                mode="resume",
+                start_index=max(0, start_index),
+                skip_header=True,
+                expected_window_id=int(current["window_id"]),
+            )
+            return jsonify(_session_payload(session))
+    except OSError:
+        app.logger.exception("Could not resume the E-PLUS automation")
+        return jsonify({"error": "Could not resume the E-PLUS automation"}), 500
+
+
+@app.post("/invoice/session/cancel")
+def cancel_invoice_session() -> tuple[Any, int] | Any:
+    auth_error = require_token()
+    if auth_error:
+        return auth_error
+    with _SEND_SESSION_LOCK:
+        session = _load_send_session()
+        current = _session_payload(session)
+        if not session or not current.get("exists"):
+            return jsonify({"error": "لا توجد جلسة إرسال محفوظة."}), 404
+        if current["status"] in {"completed", "cancelled"}:
+            return jsonify(current)
+
+        if current["process_alive"] or current["status"] == "launching":
+            _write_robot_control(
+                session,
+                mode=str(session.get("last_mode", "resume")),
+                start_index=int(current["next_index"]),
+                skip_header=bool(current["header_entered"]),
+                expected_window_id=int(current["window_id"]),
+                command="cancel",
+            )
+            return jsonify(
+                {
+                    **current,
+                    "message": "سيُلغى الروبوت عند أول نقطة آمنة بدون حفظ الفاتورة.",
+                }
+            )
+
+        _write_robot_checkpoint(
+            job_id=str(session["job_id"]),
+            status="cancelled",
+            phase="cancelled",
+            header_entered=bool(current["header_entered"]),
+            next_index=int(current["next_index"]),
+            current_index=int(current["current_index"]),
+            total_items=int(current["total_items"]),
+            window_id=int(current["window_id"]),
+        )
+        session["status"] = "cancelled"
+        session["updated_epoch"] = int(time.time())
+        atomic_write_json(SEND_SESSION_PATH, session)
+        return jsonify(_session_payload(session))
+
+
+@app.post("/invoice/session/restart")
+def restart_invoice_session() -> tuple[Any, int] | Any:
+    auth_error = require_token()
+    if auth_error:
+        return auth_error
+    try:
+        with _SEND_SESSION_LOCK:
+            session = _load_send_session()
+            current = _session_payload(session)
+            if not session or not current.get("exists"):
+                return jsonify({"error": "لا توجد جلسة إرسال محفوظة."}), 404
+            if current["process_alive"] or current["status"] == "launching":
+                return jsonify(
+                    {
+                        "error": "أوقف أو ألغِ الروبوت الحالي أولاً قبل إعادة البداية.",
+                        "session": current,
+                    }
+                ), 409
+            if not HEADER_PATH.is_file() or not ITEMS_PATH.is_file():
+                return jsonify(
+                    {"error": "ملفات الفاتورة لم تعد موجودة؛ أرسلها من شاشة المراجعة من جديد."}
+                ), 409
+
+            session["previous_job_id"] = session["job_id"]
+            session["job_id"] = uuid.uuid4().hex
+            session["attempt"] = int(session.get("attempt", 1)) + 1
+            session["updated_epoch"] = int(time.time())
+            _launch_robot_session(
+                session,
+                mode="restart",
+                start_index=0,
+                skip_header=False,
+                expected_window_id=0,
+            )
+            return jsonify(_session_payload(session))
+    except OSError:
+        app.logger.exception("Could not restart the E-PLUS automation")
+        return jsonify({"error": "Could not restart the E-PLUS automation"}), 500
 
 
 if __name__ == "__main__":

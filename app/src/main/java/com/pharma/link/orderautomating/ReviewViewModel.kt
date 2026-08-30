@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -31,6 +33,12 @@ class ReviewViewModel : ViewModel() {
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
+    private val _sendSession = MutableStateFlow<SendSessionState?>(null)
+    val sendSession: StateFlow<SendSessionState?> = _sendSession.asStateFlow()
+
+    private val _sessionActionLoading = MutableStateFlow(false)
+    val sessionActionLoading: StateFlow<Boolean> = _sessionActionLoading.asStateFlow()
+
     private val _itemToRemapIndex = MutableStateFlow(-1)
     val itemToRemapIndex: StateFlow<Int> = _itemToRemapIndex.asStateFlow()
 
@@ -43,6 +51,7 @@ class ReviewViewModel : ViewModel() {
     private var printedInvoiceTotal: Double = 0.0
     private var invoiceSourceType: String = "unknown"
     private var sendWakeLock: PowerManager.WakeLock? = null
+    private var sessionPollingJob: Job? = null
 
     // Compose may call init() again while the review screen is recomposing.
     // Keep user edits intact and only load a response when it is a new invoice.
@@ -55,6 +64,7 @@ class ReviewViewModel : ViewModel() {
     }
 
     fun init(context: Context, supplierCode: String, invoiceNumber: String, response: OcrResponse?) {
+        ensureRepository(context)
         // A repeated OCR of the same invoice number is still a new result and
         // must replace the previous review values rather than looking cached.
         val invoiceKey = "$supplierCode|$invoiceNumber|${response?.let { System.identityHashCode(it) }}"
@@ -85,6 +95,63 @@ class ReviewViewModel : ViewModel() {
                     refreshInvoiceTotalCheck()
                 }
             }
+        }
+        startSessionPolling()
+    }
+
+    private fun startSessionPolling() {
+        if (!::repository.isInitialized) return
+        sessionPollingJob?.cancel()
+        sessionPollingJob = viewModelScope.launch {
+            while (true) {
+                val state = repository.getSendSession()
+                if (state.error.isBlank()) {
+                    _sendSession.value = state.takeIf { it.exists }
+                }
+                if (state.status !in setOf("launching", "running", "cancelling")) {
+                    break
+                }
+                delay(2_000)
+            }
+        }
+    }
+
+    private fun applySessionActionResult(state: SendSessionState) {
+        if (state.exists) {
+            _sendSession.value = state
+        }
+        if (state.error.isNotBlank()) {
+            _status.value = "⚠️ ${state.error}"
+        }
+        if (state.status in setOf("launching", "running", "cancelling")) {
+            startSessionPolling()
+        }
+    }
+
+    fun resumeSendSession(context: Context, resolution: String? = null) {
+        ensureRepository(context)
+        _sessionActionLoading.value = true
+        viewModelScope.launch {
+            applySessionActionResult(repository.resumeSendSession(resolution))
+            _sessionActionLoading.value = false
+        }
+    }
+
+    fun cancelSendSession(context: Context) {
+        ensureRepository(context)
+        _sessionActionLoading.value = true
+        viewModelScope.launch {
+            applySessionActionResult(repository.cancelSendSession())
+            _sessionActionLoading.value = false
+        }
+    }
+
+    fun restartSendSession(context: Context) {
+        ensureRepository(context)
+        _sessionActionLoading.value = true
+        viewModelScope.launch {
+            applySessionActionResult(repository.restartSendSession())
+            _sessionActionLoading.value = false
         }
     }
 
@@ -132,23 +199,43 @@ class ReviewViewModel : ViewModel() {
         }
     }
 
+    fun splitItem(index: Int, splitQuantity: Double): Boolean {
+        val updatedItems = splitReviewItemList(_editableItems.value, index, splitQuantity)
+            ?: return false
+        _editableItems.value = updatedItems
+        refreshInvoiceTotalCheck()
+        return true
+    }
+
+    fun mergeItem(index: Int): Boolean {
+        val updatedItems = mergeReviewItemList(_editableItems.value, index)
+            ?: return false
+        _editableItems.value = updatedItems
+        refreshInvoiceTotalCheck()
+        return true
+    }
+
     fun setItemToRemap(index: Int) {
         _itemToRemapIndex.value = index
     }
 
     fun remapItem(context: Context, index: Int, newItem: PharmacyItem) {
+        val correctingAfterSend = _status.value.startsWith("✅")
         viewModelScope.launch {
             val items = _editableItems.value.toMutableList()
             if (index in items.indices) {
                 val currentItem = items[index]
-                val mappingKey = ArabicNormalizer.normalize(currentItem.invoiceName)
-                val sCode = ArabicNormalizer.normalize(_supplierCode.value)
+                val sCode = _supplierCode.value.trim().lowercase()
+                val previousCode = currentItem.itmCode
+                val database = AppDatabase.getDatabase(context)
 
-                AppDatabase.getDatabase(context).smartMappingDao().insertMapping(
-                    SmartMapping(sCode, mappingKey, newItem.itmCode)
+                MappingLearningRepository(context).save(
+                    supplierCode = sCode,
+                    invoiceName = currentItem.invoiceName,
+                    item = newItem
                 )
 
-                val savedMode = AppDatabase.getDatabase(context).expiryRuleDao()
+                val savedMode = database.expiryRuleDao()
                     .getForSupplier(_supplierCode.value.trim())
                     .firstOrNull { it.itmCode == newItem.itmCode }
                     ?.mode
@@ -160,6 +247,11 @@ class ReviewViewModel : ViewModel() {
                 _editableItems.value = items
                 refreshInvoiceTotalCheck()
                 _itemToRemapIndex.value = -1
+                if (correctingAfterSend) {
+                    _status.value = "✅ تم تصحيح مطابقة \"${currentItem.invoiceName}\" من كود " +
+                        "${previousCode.ifBlank { "—" }} إلى ${newItem.itmCode} داخل التطبيق. " +
+                        "صحح السطر الحالي يدويًا في E-PLUS ولا تعِد إرسال الفاتورة."
+                }
             }
         }
     }
@@ -249,6 +341,7 @@ class ReviewViewModel : ViewModel() {
 
                 _loading.value = false
                 _status.value = result
+                startSessionPolling()
             } catch (e: Exception) {
                 _loading.value = false
                 _status.value = "❌ خطأ: ${e.message}"
@@ -327,5 +420,42 @@ class ReviewViewModel : ViewModel() {
     override fun onCleared() {
         releaseSendLock()
         super.onCleared()
+    }
+}
+
+internal fun findMergeCandidateIndex(items: List<OcrItem>, index: Int): Int? {
+    if (index !in items.indices) return null
+    val itemCode = items[index].itmCode.trim()
+    if (itemCode.isEmpty()) return null
+    return items.indices.firstOrNull { candidateIndex ->
+        candidateIndex != index && items[candidateIndex].itmCode.trim() == itemCode
+    }
+}
+
+internal fun splitReviewItemList(
+    items: List<OcrItem>,
+    index: Int,
+    splitQuantity: Double
+): List<OcrItem>? {
+    if (index !in items.indices || !splitQuantity.isFinite()) return null
+    val original = items[index]
+    if (splitQuantity <= 0.0 || splitQuantity >= original.quantity) return null
+
+    return items.toMutableList().apply {
+        this[index] = original.copy(quantity = original.quantity - splitQuantity)
+        add(index + 1, original.copy(quantity = splitQuantity))
+    }
+}
+
+internal fun mergeReviewItemList(items: List<OcrItem>, index: Int): List<OcrItem>? {
+    val candidateIndex = findMergeCandidateIndex(items, index) ?: return null
+    val keepIndex = minOf(index, candidateIndex)
+    val removeIndex = maxOf(index, candidateIndex)
+    val keptItem = items[keepIndex]
+    val removedItem = items[removeIndex]
+
+    return items.toMutableList().apply {
+        this[keepIndex] = keptItem.copy(quantity = keptItem.quantity + removedItem.quantity)
+        removeAt(removeIndex)
     }
 }

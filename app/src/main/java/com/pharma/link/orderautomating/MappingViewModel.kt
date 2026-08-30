@@ -111,21 +111,10 @@ class MappingViewModel : ViewModel() {
             if (idx < 0 || idx >= _mappedItems.value.size) return@launch
 
             val currentItem = _mappedItems.value[idx]
-            val mappingKey = ArabicNormalizer.normalize(currentItem.invoiceName)
-            val sCode = supplierCode.trim().lowercase()
-
-            val db = AppDatabase.getDatabase(context)
-            db.smartMappingDao().insertMapping(
-                SmartMapping(sCode, mappingKey, pharmacyItem.itmCode)
-            )
-
-            db.ocrCorrectionCacheDao().insertOrReplace(
-                OcrCorrectionCache(
-                    supplierCode     = sCode,
-                    ocrRawText       = mappingKey,
-                    correctedItmCode = pharmacyItem.itmCode,
-                    correctedName    = pharmacyItem.nameAr
-                )
+            MappingLearningRepository(context).save(
+                supplierCode = supplierCode,
+                invoiceName = currentItem.invoiceName,
+                item = pharmacyItem
             )
 
             val newList = _mappedItems.value.toMutableList()

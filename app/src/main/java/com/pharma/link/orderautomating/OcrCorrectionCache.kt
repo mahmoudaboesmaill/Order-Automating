@@ -29,6 +29,10 @@ interface OcrCorrectionCacheDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(caches: List<OcrCorrectionCache>)
 
+    @Query("""DELETE FROM ocr_correction_cache
+              WHERE supplierCode = :supplierCode AND ocrRawText = :rawText""")
+    suspend fun deleteCorrection(supplierCode: String, rawText: String)
+
     @Query("DELETE FROM ocr_correction_cache")
     suspend fun deleteAll()
 

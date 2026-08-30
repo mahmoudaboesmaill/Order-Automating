@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -19,10 +20,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -48,10 +52,17 @@ fun ReviewScreen(
     val editableItems by viewModel.editableItems.collectAsState()
     val status by viewModel.status.collectAsState()
     val loading by viewModel.loading.collectAsState()
+    val sendSession by viewModel.sendSession.collectAsState()
+    val sessionActionLoading by viewModel.sessionActionLoading.collectAsState()
     val itemToRemapIndex by viewModel.itemToRemapIndex.collectAsState()
     val invoiceTotalCheck by viewModel.invoiceTotalCheck.collectAsState()
     val ignorePharmaWarnings by viewModel.ignorePharmaWarnings.collectAsState()
     val hasPurchaseMismatch = editableItems.any { !it.purchasePriceMethodsMatch }
+    val sentSuccessfully = status.startsWith("✅")
+    var showPostSendCorrectionPicker by remember { mutableStateOf(false) }
+    var showResumeResolution by remember { mutableStateOf(false) }
+    var showCancelSessionConfirmation by remember { mutableStateOf(false) }
+    var showRestartSessionConfirmation by remember { mutableStateOf(false) }
 
     BackHandler(enabled = !loading) { onBack() }
     BackHandler(enabled = loading) { }
@@ -82,6 +93,88 @@ fun ReviewScreen(
         )
     }
 
+    if (showPostSendCorrectionPicker) {
+        PostSendCorrectionPickerDialog(
+            items = editableItems,
+            onDismiss = { showPostSendCorrectionPicker = false },
+            onSelect = { index ->
+                showPostSendCorrectionPicker = false
+                viewModel.setItemToRemap(index)
+            }
+        )
+    }
+
+    val activeSession = sendSession?.takeIf { it.isIncomplete }
+    if (showResumeResolution && activeSession != null) {
+        AlertDialog(
+            onDismissRequest = { showResumeResolution = false },
+            icon = { Icon(Icons.Default.HelpOutline, contentDescription = null) },
+            title = { Text("الصنف الذي حدث عنده التوقف") },
+            text = {
+                Text(
+                    "الروبوت توقف أثناء الصنف رقم ${activeSession.currentIndex + 1}. " +
+                        "راجع آخر صف داخل E-PLUS أولاً: هل الصنف دخل بالكامل أم تريد إعادة هذا الصنف؟"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showResumeResolution = false
+                    viewModel.resumeSendSession(context, "completed")
+                }) { Text("دخل بالكامل") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { showResumeResolution = false }) { Text("إغلاق") }
+                    TextButton(onClick = {
+                        showResumeResolution = false
+                        viewModel.resumeSendSession(context, "retry")
+                    }) { Text("إعادة الصنف") }
+                }
+            }
+        )
+    }
+
+    if (showCancelSessionConfirmation && activeSession != null) {
+        AlertDialog(
+            onDismissRequest = { showCancelSessionConfirmation = false },
+            icon = { Icon(Icons.Default.StopCircle, contentDescription = null) },
+            title = { Text("إلغاء جلسة الإرسال؟") },
+            text = { Text("الإلغاء يحرر الجلسة فقط، ولا يحذف أو يحفظ ما كُتب بالفعل داخل E-PLUS.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showCancelSessionConfirmation = false
+                    viewModel.cancelSendSession(context)
+                }) { Text("إلغاء الجلسة") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCancelSessionConfirmation = false }) { Text("رجوع") }
+            }
+        )
+    }
+
+    if (showRestartSessionConfirmation && activeSession != null) {
+        AlertDialog(
+            onDismissRequest = { showRestartSessionConfirmation = false },
+            icon = { Icon(Icons.Default.RestartAlt, contentDescription = null) },
+            title = { Text("إعادة الإدخال من البداية؟") },
+            text = {
+                Text(
+                    "لن تتم إعادة البداية تلقائياً. تأكد أولاً أنك أغلقت أو ألغيت الفاتورة الجزئية داخل E-PLUS؛ " +
+                        "بعد التأكيد سيُدخل الروبوت رأس الفاتورة وكل الأصناف من جديد."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRestartSessionConfirmation = false
+                    viewModel.restartSendSession(context)
+                }) { Text("ابدأ من الصفر") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestartSessionConfirmation = false }) { Text("رجوع") }
+            }
+        )
+    }
+
     Scaffold(
         snackbarHost = {
             SnackbarHost(snackbarHostState) { data ->
@@ -100,28 +193,40 @@ fun ReviewScreen(
                 tonalElevation = PharmaDimens.elevationMedium,
                 shadowElevation = PharmaDimens.elevationHigh
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .navigationBarsPadding()
                         .fillMaxWidth()
                         .padding(horizontal = PharmaDimens.space16, vertical = PharmaDimens.space12),
-                    horizontalArrangement = Arrangement.spacedBy(PharmaDimens.space12)
                 ) {
-                    PharmaSecondaryButton(
-                        text = if (status.startsWith("✅")) "فاتورة جديدة" else "رجوع للبداية",
-                        onClick = onBack,
-                        modifier = Modifier.weight(1f)
-                    )
+                    if (sentSuccessfully) {
+                        PharmaSecondaryButton(
+                            text = "تصحيح مطابقة",
+                            icon = Icons.Default.Edit,
+                            onClick = { showPostSendCorrectionPicker = true },
+                            enabled = !loading && editableItems.isNotEmpty(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(PharmaDimens.space8))
+                    }
 
-                    PharmaPrimaryButton(
-                        text = "إرسال إلى E-PLUS",
-                        icon = Icons.Default.Upload,
-                        onClick = { viewModel.sendInvoice(context) },
-                        loading = loading,
-                        enabled = !loading && editableItems.isNotEmpty() &&
-                            (!hasPurchaseMismatch || ignorePharmaWarnings),
-                        modifier = Modifier.weight(1.3f)
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(PharmaDimens.space12)) {
+                        PharmaSecondaryButton(
+                            text = if (sentSuccessfully) "فاتورة جديدة" else "رجوع للبداية",
+                            onClick = onBack,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        PharmaPrimaryButton(
+                            text = if (sentSuccessfully) "إعادة الإرسال" else "إرسال إلى E-PLUS",
+                            icon = Icons.Default.Upload,
+                            onClick = { viewModel.sendInvoice(context) },
+                            loading = loading,
+                            enabled = !loading && editableItems.isNotEmpty() &&
+                                (!hasPurchaseMismatch || ignorePharmaWarnings),
+                            modifier = Modifier.weight(1.3f)
+                        )
+                    }
                 }
             }
         }
@@ -209,6 +314,24 @@ fun ReviewScreen(
                 )
             }
 
+            if (activeSession != null) {
+                item {
+                    SendSessionCard(
+                        session = activeSession,
+                        loading = sessionActionLoading,
+                        onResume = {
+                            if (activeSession.requiresResolution) {
+                                showResumeResolution = true
+                            } else {
+                                viewModel.resumeSendSession(context)
+                            }
+                        },
+                        onCancel = { showCancelSessionConfirmation = true },
+                        onRestart = { showRestartSessionConfirmation = true }
+                    )
+                }
+            }
+
             if (hasPurchaseMismatch) {
                 item {
                     Surface(
@@ -268,16 +391,126 @@ fun ReviewScreen(
                 }
             }
 
-            itemsIndexed(editableItems) { index, item ->
+            itemsIndexed(
+                items = editableItems,
+                key = { index, item -> "$index|${item.itmCode}|${item.invoiceName}" }
+            ) { index, item ->
+                val mergeCandidateIndex = findMergeCandidateIndex(editableItems, index)
                 ReviewItemCard(
                     item = item,
                     index = index + 1,
                     supplierCode = supplierCode,
                     onDelete = { viewModel.deleteItem(index) },
                     onRemap = { viewModel.setItemToRemap(index) },
+                    onSplit = { splitQuantity -> viewModel.splitItem(index, splitQuantity) },
+                    canMerge = mergeCandidateIndex != null,
+                    mergeCandidateQuantity = mergeCandidateIndex?.let { editableItems[it].quantity } ?: 0.0,
+                    onMerge = { viewModel.mergeItem(index) },
                     onExpiryModeChange = { mode -> viewModel.setExpiryMode(context, index, mode) },
                     onUpdate = { updated -> viewModel.updateItem(index, updated) }
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SendSessionCard(
+    session: SendSessionState,
+    loading: Boolean,
+    onResume: () -> Unit,
+    onCancel: () -> Unit,
+    onRestart: () -> Unit
+) {
+    val progress = if (session.totalItems > 0) {
+        session.completedItems.toFloat() / session.totalItems.toFloat()
+    } else 0f
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = PharmaShapes.large,
+        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.75f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.45f))
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(PharmaDimens.space16),
+            verticalArrangement = Arrangement.spacedBy(PharmaDimens.space8)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "جلسة إرسال قابلة للاستكمال",
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                    Text(
+                        "فاتورة ${session.invoiceNumber} — مورد ${session.supplierCode}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                }
+                Text(
+                    "${session.completedItems}/${session.totalItems}",
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
+            LinearProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                session.message,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onTertiaryContainer
+            )
+            if (session.requiresResolution) {
+                Text(
+                    "آخر صنف حالته غير مؤكدة؛ سيُطلب منك تحديدها قبل الاستكمال.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else if (session.requiresRestart) {
+                Text(
+                    "لا يمكن ضمان نفس نافذة الفاتورة الجزئية؛ الاستكمال معطّل للحماية.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else if (session.phase == "item_needs_manual_fix") {
+                Text(
+                    "أكمل التصحيح داخل E-PLUS ثم اضغط Ctrl+Shift+R.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            if (loading) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(PharmaDimens.space8)
+                ) {
+                    if (session.canResume) {
+                        Button(onClick = onResume, modifier = Modifier.weight(1.2f)) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                            Text("استكمال")
+                        }
+                    }
+                    OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
+                        Text("إلغاء الجلسة")
+                    }
+                    if (!session.processAlive && session.status == "interrupted") {
+                        OutlinedButton(onClick = onRestart, modifier = Modifier.weight(1f)) {
+                            Text("من البداية")
+                        }
+                    }
+                }
             }
         }
     }
@@ -411,6 +644,153 @@ private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, v
 private fun formatInvoiceMoney(value: Double): String =
     String.format(Locale.US, "%.2f", value)
 
+private fun formatReviewQuantity(value: Double): String =
+    if (value % 1.0 == 0.0) value.toInt().toString() else value.toString()
+
+@Composable
+private fun PostSendCorrectionPickerDialog(
+    items: List<OcrItem>,
+    onDismiss: () -> Unit,
+    onSelect: (Int) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.EditNote, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+        title = { Text("تصحيح مطابقة بعد الإرسال", fontWeight = FontWeight.ExtraBold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(PharmaDimens.space10)) {
+                Surface(
+                    shape = PharmaShapes.medium,
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f)
+                ) {
+                    Text(
+                        "اختر الصنف الغلط لتصحيح حفظ التطبيق للمستقبل. " +
+                            "سطر الفاتورة الحالية داخل E-PLUS يجب تصحيحه يدويًا، ولا تعِد إرسال الفاتورة.",
+                        modifier = Modifier.padding(PharmaDimens.space10),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(PharmaDimens.space6)
+                ) {
+                    itemsIndexed(
+                        items = items,
+                        key = { index, item -> "$index|${item.itmCode}|${item.invoiceName}" }
+                    ) { index, item ->
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(index) },
+                            shape = PharmaShapes.medium,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(PharmaDimens.space10),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(PharmaDimens.space10)
+                            ) {
+                                Icon(
+                                    Icons.Default.Edit,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        item.invoiceName,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "كود E-PLUS: ${item.itmCode.ifBlank { "—" }}  •  الكمية: ${formatReviewQuantity(item.quantity)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("إلغاء") }
+        }
+    )
+}
+
+@Composable
+private fun SplitQuantityDialog(
+    itemName: String,
+    originalQuantity: Double,
+    onDismiss: () -> Unit,
+    onConfirm: (Double) -> Unit
+) {
+    var quantityText by remember(originalQuantity) { mutableStateOf("") }
+    val splitQuantity = quantityText.toDoubleOrNull()
+    val isValid = splitQuantity != null && splitQuantity > 0.0 && splitQuantity < originalQuantity
+    val remainingQuantity = if (isValid) originalQuantity - splitQuantity!! else null
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.CallSplit, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+        title = { Text("تقسيم الكمية على صلاحيتين", fontWeight = FontWeight.ExtraBold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(PharmaDimens.space10)) {
+                Text(
+                    itemName,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "الكمية الحالية: ${formatReviewQuantity(originalQuantity)}. " +
+                        "اكتب كمية الكارت الجديد، وبعد التقسيم غيّر صلاحية كل كارت.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                OutlinedTextField(
+                    value = quantityText,
+                    onValueChange = { quantityText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("كمية الكارت الجديد") },
+                    placeholder = { Text("مثال: 5") },
+                    singleLine = true,
+                    isError = quantityText.isNotBlank() && !isValid,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    supportingText = {
+                        when {
+                            quantityText.isNotBlank() && !isValid -> Text(
+                                "أدخل رقمًا أكبر من صفر وأقل من ${formatReviewQuantity(originalQuantity)}"
+                            )
+                            remainingQuantity != null -> Text(
+                                "سيبقى في الكارت الأصلي: ${formatReviewQuantity(remainingQuantity)}"
+                            )
+                        }
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(splitQuantity!!) },
+                enabled = isValid
+            ) { Text("تأكيد التقسيم") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("إلغاء") }
+        }
+    )
+}
+
 @Composable
 fun ReviewItemCard(
     item: OcrItem,
@@ -418,11 +798,17 @@ fun ReviewItemCard(
     supplierCode: String = "",
     onDelete: () -> Unit,
     onRemap: () -> Unit,
+    onSplit: (Double) -> Unit = {},
+    canMerge: Boolean = false,
+    mergeCandidateQuantity: Double = 0.0,
+    onMerge: () -> Unit = {},
     onExpiryModeChange: (String) -> Unit = {},
     onUpdate: (OcrItem) -> Unit
 ) {
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showExpiryPicker by remember { mutableStateOf(false) }
+    var showSplitDialog by remember { mutableStateOf(false) }
+    var showMergeConfirm by remember { mutableStateOf(false) }
 
     if (showDeleteConfirm) {
         AlertDialog(
@@ -451,6 +837,40 @@ fun ReviewItemCard(
             onConfirm = { month, year ->
                 showExpiryPicker = false
                 onUpdate(item.copy(expiryMonth = month, expiryYear = year, expiryMode = ExpiryMode.REQUIRED))
+            }
+        )
+    }
+
+    if (showSplitDialog) {
+        SplitQuantityDialog(
+            itemName = item.invoiceName,
+            originalQuantity = item.quantity,
+            onDismiss = { showSplitDialog = false },
+            onConfirm = { splitQuantity ->
+                showSplitDialog = false
+                onSplit(splitQuantity)
+            }
+        )
+    }
+
+    if (showMergeConfirm) {
+        AlertDialog(
+            onDismissRequest = { showMergeConfirm = false },
+            icon = { Icon(Icons.Default.RemoveCircleOutline, contentDescription = null) },
+            title = { Text("دمج الصنف المكرر", fontWeight = FontWeight.ExtraBold) },
+            text = {
+                Text(
+                    "سيتم جمع ${formatReviewQuantity(item.quantity)} + ${formatReviewQuantity(mergeCandidateQuantity)} " +
+                        "في كارت واحد بنفس كود E-PLUS، مع الاحتفاظ بباقي بيانات أقدم كارت."
+                )
+            },
+            confirmButton = {
+                Button(onClick = { showMergeConfirm = false; onMerge() }) {
+                    Text("تأكيد الدمج")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMergeConfirm = false }) { Text("إلغاء") }
             }
         )
     }
@@ -541,6 +961,35 @@ fun ReviewItemCard(
                         tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
                         modifier = Modifier.size(22.dp)
                     )
+                }
+            }
+
+            Spacer(Modifier.height(PharmaDimens.space8))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(PharmaDimens.space8)
+            ) {
+                OutlinedButton(
+                    onClick = { showSplitDialog = true },
+                    enabled = item.quantity > 1.0,
+                    modifier = Modifier.weight(1f),
+                    shape = PharmaShapes.medium,
+                    contentPadding = PaddingValues(horizontal = PharmaDimens.space8)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(PharmaDimens.space6))
+                    Text("تقسيم الكمية")
+                }
+                OutlinedButton(
+                    onClick = { showMergeConfirm = true },
+                    enabled = canMerge,
+                    modifier = Modifier.weight(1f),
+                    shape = PharmaShapes.medium,
+                    contentPadding = PaddingValues(horizontal = PharmaDimens.space8)
+                ) {
+                    Icon(Icons.Default.Remove, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(PharmaDimens.space6))
+                    Text("دمج المكرر")
                 }
             }
 
@@ -711,16 +1160,18 @@ private fun ExpiryMonthYearPickerDialog(
         return fullYear > currentFullYear || (fullYear == currentFullYear && month > currentMonth)
     }
 
-    val months = (1..12).toList()
-    val years = (currentYear..(currentYear + 12).coerceAtMost(99)).toList()
+    val years = (currentYear..99).toList()
     val initialYearValue = initialYear.toIntOrNull()?.takeIf { it in years }
     val initialMonthValue = initialMonth.toIntOrNull()?.takeIf { it in 1..12 }
-    var selectedYear by remember {
-        mutableStateOf(initialYearValue ?: 0)
-    }
-    var selectedMonth by remember {
-        mutableStateOf(if (initialYearValue != null) initialMonthValue ?: 0 else 0)
-    }
+    var selectedYear by remember { mutableStateOf(initialYearValue ?: 0) }
+    var selectedMonth by remember { mutableStateOf(initialMonthValue ?: 0) }
+    val initialYearIndex = initialYearValue
+        ?.let { years.indexOf(it) }
+        ?.takeIf { it >= 0 }
+        ?: 0
+    val yearListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = (initialYearIndex - 2).coerceAtLeast(0)
+    )
     val hasSelectedYear = selectedYear in years
     val hasSelectedMonth = selectedMonth in 1..12
     val selectedDateIsPast = hasSelectedYear && hasSelectedMonth &&
@@ -731,7 +1182,7 @@ private fun ExpiryMonthYearPickerDialog(
     val lessThanEightMonths = monthsUntilExpiry != null &&
         monthsUntilExpiry in 1..7
     fun commitIfComplete(month: Int, year: Int) {
-        if (month !in 1..12 || year !in years) return
+        if (month !in 1..12 || year !in years || !isAllowedExpiry(month, year)) return
         if (isAllowedExpiry(month, year)) {
             val monthsLeft = (2000 + year - currentFullYear) * 12 + month - currentMonth
             if (monthsLeft in 1..7) {
@@ -755,66 +1206,108 @@ private fun ExpiryMonthYearPickerDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(PharmaDimens.space8)) {
                 Text(
-                    "اختر الشهر ثم السنة. الشهر الحالي هو ${"%02d".format(Locale.US, currentMonth)}/$currentYear",
+                    "اختر الشهر والسنة وسيتم الحفظ تلقائيًا. الشهر الحالي هو " +
+                        "\u200E${"%02d".format(Locale.US, currentMonth)}/${"%02d".format(Locale.US, currentYear)}\u200E",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                Text("الشهر", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                months.chunked(4).forEach { row ->
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(PharmaDimens.space6)
+                        horizontalArrangement = Arrangement.spacedBy(PharmaDimens.space10),
+                        verticalAlignment = Alignment.Top
                     ) {
-                        row.forEach { month ->
-                            FilterChip(
-                                selected = selectedMonth == month,
-                                onClick = {
-                                    selectedMonth = month
-                                    if (hasSelectedYear) commitIfComplete(month, selectedYear)
-                                },
-                                label = { Text("%02d".format(Locale.US, month)) },
-                                modifier = Modifier.weight(1f)
+                        Column(modifier = Modifier.weight(2f)) {
+                            Text(
+                                "الشهر",
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Center,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
                             )
+                            Spacer(Modifier.height(PharmaDimens.space6))
+                            Row(horizontalArrangement = Arrangement.spacedBy(PharmaDimens.space6)) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    (1..6).forEach { month ->
+                                        ExpiryWheelOption(
+                                            value = month,
+                                            selected = selectedMonth == month,
+                                            onClick = {
+                                                selectedMonth = month
+                                                if (hasSelectedYear) commitIfComplete(month, selectedYear)
+                                            }
+                                        )
+                                    }
+                                }
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    (7..12).forEach { month ->
+                                        ExpiryWheelOption(
+                                            value = month,
+                                            selected = selectedMonth == month,
+                                            onClick = {
+                                                selectedMonth = month
+                                                if (hasSelectedYear) commitIfComplete(month, selectedYear)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
-                    }
-                }
 
-                Text("السنة (آخر رقمين)", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                years.chunked(5).forEach { row ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(PharmaDimens.space6)
-                    ) {
-                        row.forEach { year ->
-                            FilterChip(
-                                selected = selectedYear == year,
-                                onClick = {
-                                    selectedYear = year
-                                    if (hasSelectedMonth) commitIfComplete(selectedMonth, year)
-                                },
-                                label = { Text("%02d".format(Locale.US, year)) },
-                                modifier = Modifier.weight(1f)
+                        VerticalDivider(
+                            modifier = Modifier.height(274.dp),
+                            thickness = 3.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "السنة",
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Center,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
                             )
+                            Spacer(Modifier.height(PharmaDimens.space6))
+                            LazyColumn(
+                                state = yearListState,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(248.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                items(years, key = { it }) { year ->
+                                    ExpiryWheelOption(
+                                        value = year,
+                                        selected = selectedYear == year,
+                                        onClick = {
+                                            selectedYear = year
+                                            if (hasSelectedMonth) commitIfComplete(selectedMonth, year)
+                                        }
+                                    )
+                                }
+                            }
                         }
-                        repeat(5 - row.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
 
                 when {
-                    !hasSelectedYear -> Text(
-                        "اختر السنة أولًا لتفعيل كل الشهور",
+                    !hasSelectedMonth || !hasSelectedYear -> Text(
+                        "اختر شهر الصلاحية والسنة",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold
                     )
-                    !hasSelectedMonth -> Text(
-                        "اختر شهر الصلاحية",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                     selectedDateIsPast -> Text(
-                        "خطأ: تاريخ الصلاحية يجب أن يكون بعد الشهر الحالي (${"%02d".format(Locale.US, currentMonth)}/$currentYear)",
+                        "خطأ: تاريخ الصلاحية يجب أن يكون بعد الشهر الحالي " +
+                            "(\u200E${"%02d".format(Locale.US, currentMonth)}/${"%02d".format(Locale.US, currentYear)}\u200E)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                         fontWeight = FontWeight.Bold
@@ -829,8 +1322,42 @@ private fun ExpiryMonthYearPickerDialog(
             }
         },
         confirmButton = {},
-        dismissButton = {}
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("إلغاء") }
+        }
     )
+}
+
+@Composable
+private fun ExpiryWheelOption(
+    value: Int,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val shape = PharmaShapes.medium
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(38.dp)
+            .clip(shape)
+            .clickable(onClick = onClick),
+        shape = shape,
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(
+            if (selected) 2.dp else 1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+        )
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = "%02d".format(Locale.US, value),
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
+                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
 }
 
 @Composable
@@ -947,14 +1474,21 @@ fun PharmaHeaderSmallField(
 @Composable
 fun MappingDialog(
     invoiceName: String,
+    initialSearchQuery: String = "",
     onDismiss: () -> Unit,
     onSelect: (PharmacyItem) -> Unit
 ) {
     val context = LocalContext.current
-    var query by remember { mutableStateOf("") }
+    var query by remember(invoiceName, initialSearchQuery) { mutableStateOf(initialSearchQuery) }
     var results by remember { mutableStateOf<List<PharmacyItem>>(emptyList()) }
     var showAddItemDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(initialSearchQuery) {
+        if (initialSearchQuery.isNotBlank()) {
+            results = ItemsDatabase.search(context, initialSearchQuery)
+        }
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
